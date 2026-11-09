@@ -16,3 +16,6 @@ tracing.workspace = true
 grass.workspace = true
 serde_json.workspace = true
 vte4.workspace = true
+
+[lints]
+workspace = true
