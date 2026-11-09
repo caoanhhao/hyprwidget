@@ -105,6 +105,7 @@ pub enum Kind {
     Popover,
     DrawingArea,
     Calendar,
+    Terminal,
 }
 
 impl Kind {
@@ -130,6 +131,7 @@ impl Kind {
         Kind::Popover,
         Kind::DrawingArea,
         Kind::Calendar,
+        Kind::Terminal,
     ];
 
     pub fn name(self) -> &'static str {
@@ -155,6 +157,7 @@ impl Kind {
             Kind::Popover => "Popover",
             Kind::DrawingArea => "DrawingArea",
             Kind::Calendar => "Calendar",
+            Kind::Terminal => "Terminal",
         }
     }
 
@@ -217,6 +220,7 @@ pub fn create(kind: Kind) -> gtk4::Widget {
         Kind::Popover => gtk4::Popover::new().upcast(),
         Kind::DrawingArea => gtk4::DrawingArea::new().upcast(),
         Kind::Calendar => gtk4::Calendar::new().upcast(),
+        Kind::Terminal => crate::terminal::create(),
     };
     if kind == Kind::Box {
         // Orientation defaults; `vertical = true` flips it.
@@ -720,6 +724,8 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
             .unwrap()
             .set_show_week_numbers(v.truthy()),
 
+        (Kind::Terminal, _) if crate::terminal::set_prop(w, name, v)? => {}
+
         _ => return set_gobject_prop(w.upcast_ref(), kind, name, v),
     }
     Ok(())
@@ -1079,6 +1085,7 @@ pub const EVENTS: &[&str] = &[
     "on_show",
     "on_hide",
     "on_destroy",
+    "on_exit",
 ];
 
 /// Connects `on_*` handlers.
@@ -1234,6 +1241,14 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
             w.connect_destroy(move |_| {
                 h(Event::Destroy);
             });
+        }
+        "on_exit" => {
+            crate::terminal::connect_exit(
+                w,
+                Rc::new(move |code| {
+                    h(Event::Value(Prop::Num(code.into())));
+                }),
+            )?;
         }
         _ => return Err(format!("unknown event '{name}'")),
     }

@@ -33,6 +33,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zbus = { version = "5.19", default-features = false, features = ["async-io"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 gdk-pixbuf = "0.22"
+vte4 = { version = "0.10", features = ["v0_80"] }
 
 [package]
 name = "hyprwidget"
