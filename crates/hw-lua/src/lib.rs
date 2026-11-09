@@ -2,6 +2,7 @@
 //! builder, Hyprland-style config loading and the daemon.
 
 pub mod app;
+mod app_widget;
 pub mod builder;
 pub mod cairo;
 pub mod convert;

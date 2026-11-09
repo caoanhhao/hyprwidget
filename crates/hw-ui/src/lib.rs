@@ -4,6 +4,7 @@
 //! Language-agnostic: `hw-lua` walks Lua/JSON widget trees and drives this
 //! crate through [`widgets::Prop`] values.
 
+pub mod app;
 pub mod monitors;
 pub mod style;
 pub mod watch;

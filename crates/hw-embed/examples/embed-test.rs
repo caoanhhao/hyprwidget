@@ -1,12 +1,14 @@
-//! Dev harness for the M0.5 spike: a layer-shell window with one `EmbedView`.
+//! Dev harness: a layer-shell window with one `EmbedView` and an entry.
 //!
-//! `cargo run -p hw-embed --example embed-test -- foot`
+//! `cargo run -p hw-embed --example embed-test -- kitty`
 //! Size with `HW_EMBED_SIZE=WxH` (default 900x600). `kill -USR1` toggles the
 //! view's visibility (frame callbacks must stop while it is hidden).
+//! `HW_EMBED_SOCKET=1` uses socket mode, `HW_EMBED_MODE=scale` scale mode,
+//! `HW_EMBED_ROUNDING=16` rounded corners, `HW_EMBED_RESTART=on-exit`.
 
 use gtk4::{glib, prelude::*};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
-use hw_embed::{EmbedServer, EmbedView};
+use hw_embed::EmbedView;
 
 fn main() -> glib::ExitCode {
     if std::env::var_os("GSK_RENDERER").is_none() {
@@ -21,7 +23,7 @@ fn main() -> glib::ExitCode {
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let argv = if argv.is_empty() {
-        vec!["foot".to_string()]
+        vec!["kitty".to_string()]
     } else {
         argv
     };
@@ -38,14 +40,6 @@ fn main() -> glib::ExitCode {
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
     app.connect_activate(move |app| {
-        let server = match EmbedServer::new() {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("embed-test: {e:#}");
-                app.quit();
-                return;
-            }
-        };
         let window = gtk4::ApplicationWindow::new(app);
         window.init_layer_shell();
         window.set_namespace(Some("hyprwidget-embed-test"));
@@ -60,10 +54,30 @@ fn main() -> glib::ExitCode {
         let frame = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         frame.add_css_class("embed-frame");
         let label = gtk4::Label::new(Some(&format!("hw-embed: {}", argv.join(" "))));
+        // A plain GTK entry to compare typing / clipboard with.
+        let entry = gtk4::Entry::new();
+        entry.set_placeholder_text(Some("hyprwidget's own entry"));
         let view = EmbedView::new();
+        let env = |k: &str| std::env::var(k).ok();
+        view.set_command(argv.clone());
+        view.set_keep_alive(true);
+        view.set_socket(env("HW_EMBED_SOCKET").is_some());
+        if let Some(m) = env("HW_EMBED_MODE").and_then(|m| m.parse().ok()) {
+            view.set_mode(m);
+        }
+        if let Some(r) = env("HW_EMBED_RESTART").and_then(|m| m.parse().ok()) {
+            view.set_restart(r);
+        }
+        if let Some(r) = env("HW_EMBED_ROUNDING").and_then(|m| m.parse().ok()) {
+            view.set_rounding(r);
+        }
+        view.connect_title_changed(|_, t| tracing::info!(title = t, "title"));
+        view.connect_app_id_changed(|_, t| tracing::info!(app_id = t, "app_id"));
+        view.connect_exited(|_, c| tracing::info!(code = c, "exited"));
         view.set_hexpand(true);
         view.set_vexpand(true);
         frame.append(&label);
+        frame.append(&entry);
         frame.append(&view);
         window.set_child(Some(&frame));
 
@@ -81,11 +95,6 @@ fn main() -> glib::ExitCode {
                 }
             ),
         );
-        if let Err(e) = server.spawn(&view, &argv) {
-            eprintln!("embed-test: spawn: {e:#}");
-        }
-        // Keep the server alive as long as the window.
-        unsafe { window.set_data("hw-embed-server", server) };
         window.present();
     });
     app.run_with_args::<&str>(&[])
