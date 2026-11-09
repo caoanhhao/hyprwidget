@@ -34,6 +34,13 @@ use crate::signal::{JsonSetter, LuaSignal, MonitorsSource, as_signal, call_value
 
 const PRELUDE: &str = include_str!("prelude.lua");
 
+/// Widget option for the `ignore_alpha` layer rule of our namespaces
+/// (`hw.config({ blur = { ignore_alpha = 0.3 } })`, `false` = no rule).
+const IGNORE_ALPHA_OPTION: &str = "blur:ignore_alpha";
+/// Same value `~/.config/hypr/config/layerrule.lua` used for the AGS panels:
+/// low enough that translucent backgrounds still get blurred.
+const DEFAULT_IGNORE_ALPHA: f64 = 0.1;
+
 /// GTK side; absent in headless mode (`check`, offline `option`).
 pub struct Ui {
     pub app: gtk4::Application,
@@ -57,6 +64,8 @@ pub struct Core {
     pub extra_rules: RefCell<Vec<String>>,
     /// `hw.service.*`, started on first use.
     pub services: crate::service::Services,
+    /// Generated SCSS partials from `hw.scss(name, text)`.
+    pub scss_partials: RefCell<std::collections::BTreeMap<String, String>>,
 }
 
 impl Core {
@@ -81,6 +90,7 @@ impl Core {
             all_ns: RefCell::default(),
             extra_rules: RefCell::default(),
             services: Default::default(),
+            scss_partials: Default::default(),
         }))
     }
 
@@ -113,10 +123,13 @@ impl Core {
             return;
         }
         let popups = self.options.get("decoration:blur:popups") == json!(true);
-        let alpha = self
-            .options
-            .get("decoration:blur:popups_ignorealpha")
-            .as_f64();
+        // `ignore_alpha` on the layer itself (Hyprland's
+        // `popups_ignorealpha` only covers popups and is usually close to
+        // 1, which would leave translucent panels unblurred).
+        let alpha = match self.options.get(IGNORE_ALPHA_OPTION) {
+            serde_json::Value::Bool(false) => None,
+            v => Some(v.as_f64().unwrap_or(DEFAULT_IGNORE_ALPHA)),
+        };
         for rule in hyprland::blur_rules(ns, popups, alpha) {
             if let Err(e) = hyprland::eval(&rule) {
                 tracing::warn!("layer rule for '{ns}': {e:#}");
@@ -957,6 +970,85 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
                 st.core.extra_rules.borrow_mut().push(code);
             }
             Ok(())
+        })?,
+    )?;
+
+    // JSON (command output, web APIs)
+    let json = lua.create_table()?;
+    json.set(
+        "decode",
+        lua.create_function(|lua, text: mlua::LuaString| {
+            let v: serde_json::Value = serde_json::from_slice(&text.as_bytes())
+                .map_err(|e| mlua::Error::runtime(format!("hw.json.decode: {e}")))?;
+            json_to_lua(lua, &v)
+        })?,
+    )?;
+    json.set(
+        "encode",
+        lua.create_function(|lua, v: Value| {
+            serde_json::to_string(&lua_to_json(lua, v)?)
+                .map_err(|e| mlua::Error::runtime(format!("hw.json.encode: {e}")))
+        })?,
+    )?;
+    hw.set("json", json)?;
+
+    // Styles
+    hw.set(
+        "scss",
+        lua.create_function(|lua, (name, text): (String, String)| {
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                || name == "hypr"
+            {
+                return Err(mlua::Error::runtime(format!(
+                    "hw.scss: invalid partial name '{name}'"
+                )));
+            }
+            let st = RtState::get(lua)?;
+            st.core
+                .scss_partials
+                .borrow_mut()
+                .insert(name.clone(), text.clone());
+            if let Some(ui) = &st.core.ui {
+                let changed = ui
+                    .styles
+                    .write_partial(&name, &text)
+                    .map_err(|e| mlua::Error::runtime(format!("{e:#}")))?;
+                // While loading, the stylesheet is compiled right after.
+                if changed
+                    && !st.loading.get()
+                    && let Err(e) = ui.styles.reload_user()
+                {
+                    tracing::error!("stylesheet: {e:#}");
+                }
+            }
+            Ok(())
+        })?,
+    )?;
+    hw.set(
+        "watch_file",
+        lua.create_function(|lua, (path, f): (String, Function)| {
+            let st = RtState::get(lua)?;
+            let file = gio::File::for_path(&path);
+            let mon = file
+                .monitor_file(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE)
+                .map_err(|e| mlua::Error::runtime(format!("hw.watch_file {path}: {e}")))?;
+            let weak = lua.weak();
+            mon.connect_changed(move |_, _, _, ev| {
+                use gio::FileMonitorEvent as E;
+                if !matches!(
+                    ev,
+                    E::ChangesDoneHint | E::Created | E::Deleted | E::MovedIn | E::Renamed
+                ) {
+                    return;
+                }
+                if let Some(lua) = weak.try_upgrade() {
+                    RtState::spawn(&lua, &f, ());
+                }
+            });
+            Ok(TimerHandle(st.keep(Box::new(mon))))
         })?,
     )?;
 

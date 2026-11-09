@@ -1,0 +1,11 @@
+$phi: 1.618;
+$phi-min: $phi - 1;
+$phi-percentage: $phi-min * 100;
+
+$BOX-SHADOW: 0px 5px 10px rgba(0, 0, 0, 0.2);
+
+// Hyprland-inherited (PLAN.md §3.6): surfaces round like Hyprland windows.
+// AGS hard-coded 10px; set `$rounding: 10px;` here for the exact old look.
+$rounding: $decoration-rounding;
+// Space between modules follows general:gaps_in (AGS: 5px).
+$gap: max($general-gaps_in, 5px);

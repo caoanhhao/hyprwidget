@@ -4,6 +4,7 @@
 require_all({
   "general",
   "decoration",
+  "theme",
   "bar",
   "services",
 })

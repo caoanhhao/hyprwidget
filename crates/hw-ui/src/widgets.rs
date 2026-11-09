@@ -1188,6 +1188,11 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
                         h(Event::Value(Prop::Str(s)));
                     });
             }
+            Kind::Popover => {
+                w.connect_visible_notify(move |p| {
+                    h(Event::Value(Prop::Bool(p.is_visible())));
+                });
+            }
             Kind::MenuButton => {
                 w.downcast_ref::<gtk4::MenuButton>()
                     .unwrap()
@@ -1225,7 +1230,17 @@ pub fn set_draw_func(w: &gtk4::Widget, f: DrawFn) -> Result<(), String> {
     let area = w
         .downcast_ref::<gtk4::DrawingArea>()
         .ok_or("draw is only valid on DrawingArea")?;
-    area.set_draw_func(move |_, cr, width, height| f(cr, width, height));
+    area.set_draw_func(move |area, cr, width, height| {
+        // Start from the CSS `color` so drawings follow the stylesheet.
+        let fg = area.color();
+        cr.set_source_rgba(
+            fg.red().into(),
+            fg.green().into(),
+            fg.blue().into(),
+            fg.alpha().into(),
+        );
+        f(cr, width, height)
+    });
     Ok(())
 }
 

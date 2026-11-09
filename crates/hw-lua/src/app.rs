@@ -358,6 +358,9 @@ pub fn check(dir: ConfigDir) -> Result<Vec<String>> {
         gen_tmp.join("_hypr.scss"),
         hw_core::options::to_scss(&core.options.tree().peek()),
     )?;
+    for (name, text) in core.scss_partials.borrow().iter() {
+        hw_ui::style::write_partial(&gen_tmp, name, text)?;
+    }
     let style_dir = cfg.style.parent().map(PathBuf::from).unwrap_or_default();
     if let Err(e) = hw_ui::style::compile_file(&cfg.style, &[&style_dir, &gen_tmp]) {
         problems.push(format!("{e:#}"));

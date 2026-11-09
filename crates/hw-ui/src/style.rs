@@ -34,6 +34,16 @@ pub fn compile_str(scss: &str, load_paths: &[&Path]) -> Result<String> {
     grass::from_string(scss.to_owned(), &opts).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+/// Writes `<dir>/_<name>.scss` unless it already has this content.
+pub fn write_partial(dir: &Path, name: &str, scss: &str) -> Result<bool> {
+    let path = dir.join(format!("_{name}.scss"));
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(scss) {
+        return Ok(false);
+    }
+    std::fs::write(&path, scss).with_context(|| format!("writing {}", path.display()))?;
+    Ok(true)
+}
+
 /// Owns the CSS providers of the app.
 ///
 /// * `base`: CSS custom properties + [`DEFAULT_SCSS`]
@@ -100,6 +110,12 @@ impl Styles {
         let vars = hw_core::options::to_css_vars(tree);
         self.base.load_from_string(&format!("{vars}\n{css}"));
         Ok(())
+    }
+
+    /// Writes the generated partial `_<name>.scss` next to `_hypr.scss` (so
+    /// the user's SCSS can `@import "<name>"`). Returns whether it changed.
+    pub fn write_partial(&self, name: &str, scss: &str) -> Result<bool> {
+        write_partial(&self.gen_dir, name, scss)
     }
 
     /// Recompiles the user's stylesheet. On error the previous CSS stays.
