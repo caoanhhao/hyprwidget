@@ -43,8 +43,15 @@ local FILE_MANAGERS = {
   ranger = "kitty ranger",
 }
 
+local paths = require("lib.paths")
+
 local function system_theme(light)
-  util.run({ "bash", "-c", "$HOME/.config/hypr/theme/scripts/system-theme.sh switch " .. (light and "light" or "dark") })
+  local script = paths.get("system_theme")
+  if not script then
+    print("launcher: paths.system_theme is not set")
+    return
+  end
+  util.run({ "bash", "-c", script .. " switch " .. (light and "light" or "dark") })
 end
 
 -- `> …` (constants/app.constants.ts customApps)
@@ -55,7 +62,7 @@ local CUSTOM_APPS = {
     name = "System Sleep",
     icon = "\u{F186}",
     launch = function()
-      util.run({ "bash", "-c", "$HOME/.config/hypr/scripts/hyprlock.sh suspend" })
+      util.run({ "bash", "-c", paths.suspend or "systemctl suspend" })
     end,
   },
   { name = "System Restart", icon = "\u{F0709}", launch = function() util.run({ "reboot" }) end },
@@ -244,7 +251,7 @@ local function search(text, ctx)
   end
   if util.trim(text):lower() == "translate" then
     return {
-      { name = "Type the text to translate", description = "translate hello > fr (default: vi)", close_on_launch = false, launch = function() end },
+      { name = "Type the text to translate", description = "translate hello > fr (default: settings translate.lang)", close_on_launch = false, launch = function() end },
     }
   end
 

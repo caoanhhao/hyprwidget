@@ -12,7 +12,7 @@ local M = {}
 
 M.MAX_ITEMS = 10
 -- Written by ~/.config/hypr/scripts/clipboard-monitor.sh.
-M.CLIPBOARD_HISTORY = HOME .. "/.config/ags/cache/launcher/clipboard-history.json"
+M.CLIPBOARD_HISTORY = util.CACHE_DIR .. "/launcher/clipboard-history.json"
 M.NOTES = util.CACHE_DIR .. "/launcher/notes.json"
 M.EMOJIS = CONFIG_DIR .. "/assets/emojis.json"
 M.SCRIPTS = CONFIG_DIR .. "/scripts"
@@ -171,7 +171,13 @@ function M.emoji_results(query)
 end
 
 ----------------------------------------------------------------------------
--- Translate: `translate <text> > <lang>` (default vi), via scripts/translate.sh
+-- Translate: `translate <text> > <lang>` (default: setting translate.lang),
+-- via scripts/translate.sh
+
+local function default_lang()
+  local l = hw.settings:get("translate.lang")
+  return type(l) == "string" and l ~= "" and l or "en"
+end
 
 function M.parse_translate(text)
   local rest = strip_prefix(text, "translate")
@@ -184,10 +190,10 @@ function M.parse_translate(text)
   end
   local source, target = rest:match("^(.-)>(.*)$")
   if not source then
-    return { text = rest, lang = "vi" }
+    return { text = rest, lang = default_lang() }
   end
   target = util.trim(target):match("^[^>]*")
-  return { text = util.trim(source), lang = target ~= "" and util.trim(target) or "vi" }
+  return { text = util.trim(source), lang = target ~= "" and util.trim(target) or default_lang() }
 end
 
 --- Yields (call from a coroutine).

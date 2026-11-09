@@ -13,7 +13,7 @@ local SCRIPTS = CONFIG_DIR .. "/scripts/"
 -- ~/.face.icon, else the bundled default (AGS variables.ts).
 local function profile_picture()
   local face = HOME .. "/.face.icon"
-  return common.file_exists(face) and face or (CONFIG_DIR .. "/assets/userpanel/archeclipse_default_pfp.jpg")
+  return common.file_exists(face) and face or (CONFIG_DIR .. "/assets/userpanel/default_pfp.jpg")
 end
 
 -- UserProfile ---------------------------------------------------------------
@@ -67,7 +67,7 @@ end)
 
 hw.define("KeyBinds", function(props)
   local binds = hw.state({})
-  hw.exec_async({ "bash", SCRIPTS .. "get-keybinds.sh" }, function(out, err)
+  hw.exec_async({ "bash", SCRIPTS .. "get-keybinds.sh", require("lib.paths").keybinds }, function(out, err)
     local ok, parsed = pcall(hw.json.decode, out or "")
     if err or not ok or type(parsed) ~= "table" then
       print("KeyBinds: " .. tostring(err or parsed))
@@ -153,7 +153,7 @@ local function custom_scripts()
       keybind = { "SUPER", "CTRL", "SHIFT", "S" },
       app = "grimblast",
       package = "grimblast-git",
-      cmd = 'bash -c "$HOME/.config/hypr/scripts/screenshot.sh --area"',
+      cmd = require("lib.paths").screenshot_area or 'grimblast copysave area',
     },
     {
       name = "Record Screen",
@@ -161,7 +161,7 @@ local function custom_scripts()
       description = "Record entire screen",
       keybind = { "SUPER", "SHIFT", "R" },
       app = "wf-recorder",
-      cmd = 'bash -c "$HOME/.config/hypr/scripts/screenrecord.sh --now"',
+      cmd = require("lib.paths").screenrecord or 'wf-recorder -f "$HOME/Videos/recording-$(date +%s).mp4"',
     },
     { name = "Volume Control", icon = "\u{f057e}", description = "Adjust volume", app = "pavucontrol", cmd = "pavucontrol" },
     {

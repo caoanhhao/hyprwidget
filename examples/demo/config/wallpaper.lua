@@ -7,8 +7,20 @@ local W = hw.widget
 local common = require("config.bar.common")
 local Box = common.Box
 
-local DAEMON = HOME .. "/.config/hypr/wallpaper-daemon"
-local LIST = CONFIG_DIR .. "/scripts/get-wallpapers.sh"
+local paths = require("lib.paths")
+local DAEMON = paths.get("wallpaper_daemon")
+local WALLPAPERS = paths.wallpapers
+-- get-wallpapers.sh reads the two paths from its environment.
+local function list_cmd(...)
+  return {
+    "env",
+    "WALLPAPER_DAEMON=" .. (DAEMON or ""),
+    "WALLPAPER_DIR=" .. WALLPAPERS,
+    "bash",
+    CONFIG_DIR .. "/scripts/get-wallpapers.sh",
+    ...,
+  }
+end
 local CACHE = (os.getenv("XDG_CACHE_HOME") or (HOME .. "/.cache")) .. "/hyprwidget/thumbnails/"
 local TARGETS = { "workspace", "sddm", "lockscreen" }
 
@@ -16,9 +28,10 @@ local function sh_quote(s)
   return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
 end
 
--- ~/.config/wallpapers/<cat>/x.png → <cache>/thumbnails/<cat>/x.jpg
+-- <wallpapers>/<cat>/x.png → <cache>/thumbnails/<cat>/x.jpg
 local function thumbnail(file)
-  local rel = file:match("/%.config/wallpapers/(.+)$")
+  local prefix = WALLPAPERS .. "/"
+  local rel = file:sub(1, #prefix) == prefix and file:sub(#prefix + 1) or nil
   if not rel then
     return file
   end
@@ -45,7 +58,7 @@ end
 -- Shared by every monitor: categories → files.
 local wallpapers = hw.state({})
 local function fetch_wallpapers(done)
-  hw.exec_async({ "bash", LIST }, function(out, err)
+  hw.exec_async(list_cmd(), function(out, err)
     if err then
       notify("Error", err)
     else
@@ -142,7 +155,7 @@ local function WallpaperSwitcher(monitor)
   end
 
   local function fetch_current()
-    hw.exec_async({ "bash", LIST, "--current", monitor.name }, function(out, err)
+    hw.exec_async(list_cmd("--current", monitor.name), function(out, err)
       if err then
         notify("Error", err)
         return
@@ -155,6 +168,10 @@ local function WallpaperSwitcher(monitor)
   end
 
   local function set_workspace_wallpaper(file)
+    if not DAEMON then
+      notify("Wallpaper", "paths.wallpaper_daemon is not set")
+      return
+    end
     status:set("loading")
     hw.exec_async({ DAEMON .. "/set-wallpaper.sh", tostring(workspace:peek()), monitor.name, file }, function(_, err)
       if err then
@@ -173,18 +190,22 @@ local function WallpaperSwitcher(monitor)
     end
     local cmd
     if t == "sddm" then
+      if not paths.get("sddm_theme_conf") then
+        notify("Wallpaper", "paths.sddm_theme_conf is not set")
+        return
+      end
       cmd = {
         "pkexec",
         "sed",
         "-i",
         "s|^background=.*|background=" .. file .. "|",
-        "/usr/share/sddm/themes/where_is_my_sddm_theme/theme.conf",
+        paths.sddm_theme_conf,
       }
     else
       cmd = {
         "bash",
         "-c",
-        "mkdir -p $HOME/.config/wallpapers/lockscreen && cp " .. sh_quote(file) .. " $HOME/.config/wallpapers/lockscreen/wallpaper",
+        "mkdir -p " .. sh_quote(paths.lockscreen_wallpaper:match("^(.*)/") or ".") .. " && cp " .. sh_quote(file) .. " " .. sh_quote(paths.lockscreen_wallpaper),
       }
     end
     status:set("loading")
@@ -236,7 +257,7 @@ local function WallpaperSwitcher(monitor)
         status:set("idle")
         return
       end
-      local dir = HOME .. "/.config/wallpapers/custom"
+      local dir = WALLPAPERS .. "/custom"
       local base = path:match("([^/]+)$") or "wallpaper"
       hw.exec_async({ "bash", "-c", "mkdir -p " .. sh_quote(dir) .. " && cp -- " .. sh_quote(path) .. " " .. sh_quote(dir .. "/" .. base) }, function(_, cerr)
         if cerr then
@@ -442,6 +463,10 @@ local function WallpaperSwitcher(monitor)
       label = "󰑐",
       tooltip_markup = "Reload <b>Wallpaper Daemon</b>",
       on_click = function()
+        if not DAEMON then
+          fetch_wallpapers()
+          return
+        end
         status:set("loading")
         hw.exec_async({ DAEMON .. "/reload.sh" }, function(_, err)
           if err then

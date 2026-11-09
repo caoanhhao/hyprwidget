@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-file="$HOME/.config/hypr/config/bind.lua"
+# hl.bind(...) Lua config; set by config/panels/left_widgets.lua (paths.keybinds).
+file="${1:-$HOME/.config/hypr/hyprland.lua}"
 
 json_escape() {
   sed 's/\\/\\\\/g; s/"/\\"/g'

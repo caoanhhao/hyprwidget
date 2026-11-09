@@ -7,11 +7,12 @@
 --   "material" (default): computed by hyprwidget from the current wallpaper
 --     (hw.theme, material-colors), mapped onto the cwal names the AGS styles
 --     use ($background, $foreground, $color0..15). $md-* are available too.
---   "cwal": ~/.cache/cwal/colors.scss written by hypr's wal-theme.sh, as AGS.
-local cwal = HOME .. "/.cache/cwal/colors.scss"
--- Written by hypr's wallpaper daemon whenever the shown wallpaper changes.
-local current = HOME .. "/.config/hypr/wallpaper-daemon/config/current.conf"
-local system_theme = HOME .. "/.config/hypr/theme/scripts/system-theme.sh"
+--   "cwal": paths.cwal_colors (cwal's colors.scss), as AGS.
+local paths = require("lib.paths")
+local cwal = paths.cwal_colors
+-- Written by the wallpaper daemon whenever the shown wallpaper changes.
+local current = paths.wallpaper_daemon and (paths.wallpaper_daemon .. "/config/current.conf")
+local system_theme = paths.get("system_theme")
 
 local function read(path)
   local f = io.open(path, "r")
@@ -77,11 +78,11 @@ end
 -- Light/dark: from the wallpaper's brightness (AGS dynamicThemeVariants,
 -- like hypr's detect_variant_from_wallpaper), else the system theme.
 local function update_wallpaper()
-  local path = (read(current) or ""):gsub("%s+$", ""):gsub("^%$HOME", HOME)
+  local path = (current and read(current) or ""):gsub("%s+$", ""):gsub("^%$HOME", HOME)
   if path == "" then
     return
   end
-  if variants:peek() ~= false then
+  if variants:peek() ~= false or not system_theme then
     hw.theme:set_wallpaper(path, "auto")
   else
     hw.exec_async({ "bash", "-c", system_theme .. " get" }, function(out)
@@ -103,4 +104,6 @@ hw.watch_file(cwal, function()
     regen()
   end
 end)
-hw.watch_file(current, update_wallpaper)
+if current then
+  hw.watch_file(current, update_wallpaper)
+end

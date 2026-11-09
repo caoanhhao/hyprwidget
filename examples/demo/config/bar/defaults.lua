@@ -23,6 +23,8 @@ M.defaults = {
   ["leftPanel.lock"] = false,
   ["crypto.favorite"] = { symbol = "", timeframe = "" },
   ["weather.city"] = "",
+  -- Target language of `translate <text>` in the launcher.
+  ["translate.lang"] = "en",
 }
 
 function M.ensure()

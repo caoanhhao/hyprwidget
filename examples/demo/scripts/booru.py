@@ -43,7 +43,7 @@ def log(message):
 SETTINGS_PATH = Path(
     os.environ.get(
         "BOORU_SETTINGS",
-        str(Path.home() / ".config" / "ags" / "cache" / "settings" / "settings.json"),
+        str(Path(__file__).resolve().parent.parent / "cache" / "settings" / "settings.json"),
     )
 )
 SUPPORTED_APIS = {"danbooru", "safebooru", "wallhaven"}

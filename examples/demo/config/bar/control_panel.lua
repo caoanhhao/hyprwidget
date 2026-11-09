@@ -6,15 +6,18 @@ local W = hw.widget
 local common = require("config.bar.common")
 local Box = common.Box
 
-local THEME_SCRIPT = HOME .. "/.config/hypr/theme/scripts/system-theme.sh"
+local paths = require("lib.paths")
+local THEME_SCRIPT = paths.get("system_theme")
 
 -- AGS globalTheme: true = light.
 local light = hw.state(false)
-hw.exec_async({ "bash", "-c", THEME_SCRIPT .. " get" }, function(out)
-  if out then
-    light:set(out:find("light") ~= nil)
-  end
-end)
+if THEME_SCRIPT then
+  hw.exec_async({ "bash", "-c", THEME_SCRIPT .. " get" }, function(out)
+    if out then
+      light:set(out:find("light") ~= nil)
+    end
+  end)
+end
 
 local function slider(icon, value, on_change, visible)
   return Box({
@@ -125,6 +128,10 @@ return function()
           return l and "Switch to Dark Theme" or "Switch to Light Theme"
         end),
         on_toggle = function(on)
+          if not THEME_SCRIPT then
+            print("control panel: paths.system_theme is not set")
+            return
+          end
           hw.exec_async({ "bash", "-c", THEME_SCRIPT .. " switch " .. (on and "light" or "dark") }, function(_, err)
             if not err then
               light:set(on)

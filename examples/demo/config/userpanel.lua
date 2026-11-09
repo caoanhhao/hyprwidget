@@ -5,7 +5,7 @@ local W = hw.widget
 local common = require("config.bar.common")
 local Box = common.Box
 
-local FALLBACK_PFP = HOME .. "/.config/ags/assets/userpanel/archeclipse_default_pfp.jpg"
+local FALLBACK_PFP = CONFIG_DIR .. "/assets/userpanel/default_pfp.jpg"
 
 local function exists(path)
   local f = io.open(path, "r")
@@ -89,7 +89,7 @@ local function UserPanel(monitor)
             end),
             action("sleep", "󰤄", "put system to sleep", function()
               hide()
-              common.spawn({ "bash", "-c", "$HOME/.config/hypr/scripts/hyprlock.sh suspend" })
+              common.spawn({ "bash", "-c", require("lib.paths").suspend or "systemctl suspend" })
             end),
             action("reboot", "󰜉", "reboot immediately", function()
               common.spawn({ "reboot" })

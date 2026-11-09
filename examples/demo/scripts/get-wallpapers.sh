@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Define the file that contains the wallpaper paths
-wallpaper_config="$HOME/.config/hypr/wallpaper-daemon/config"
-wallpaper_folder="$HOME/.config/wallpapers"
+# Set by config/wallpaper.lua from lib/paths.lua (wallpaper_daemon, wallpapers).
+wallpaper_config="${WALLPAPER_DAEMON:+$WALLPAPER_DAEMON/config}"
+wallpaper_folder="${WALLPAPER_DIR:-$HOME/Pictures/Wallpapers}"
 # Thumbnails live in hyprwidget's cache (AGS used ~/.config/ags/cache/thumbnails).
 thumbnail_folder="${XDG_CACHE_HOME:-$HOME/.cache}/hyprwidget/thumbnails"
 
@@ -75,6 +75,11 @@ if [ "$1" == "--current" ]; then
         exit 1
     else
         monitor=$2
+    fi
+    # No wallpaper daemon: no per-workspace wallpapers.
+    if [ -z "$wallpaper_config" ] || [ ! -f "$wallpaper_config/$monitor/defaults.conf" ]; then
+        echo "[]"
+        exit 0
     fi
     # Read the file line by line
     while IFS='=' read -r key path; do

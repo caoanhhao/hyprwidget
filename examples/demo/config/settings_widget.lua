@@ -12,7 +12,7 @@ local Box = common.Box
 
 local M = {}
 
-local HYPR_THEME_CONF = HOME .. "/.config/hypr/theme/theme.conf"
+local HYPR_THEME_CONF = require("lib.paths").theme_conf
 
 local function setting(name, value, type_, min, max, tooltip)
   return { name = name, value = value, type = type_, min = min, max = max, tooltip = tooltip }
@@ -83,8 +83,11 @@ local function notify(summary, body)
   hw.exec_async({ "notify-send", "-a", "hyprwidget", summary, body or "" }, function() end)
 end
 
--- theme.conf flags read by ~/.config/hypr/theme/scripts (AGS setThemeFlagInConf).
+-- paths.theme_conf flags read by the theme scripts (AGS setThemeFlagInConf).
 local function set_theme_flag(flag, on)
+  if not HYPR_THEME_CONF then
+    return
+  end
   local v = on and "true" or "false"
   local script = string.format(
     [[f=%q; if [ -f "$f" ]; then sed -i 's/^%s=.*/%s=%s/' "$f"; grep -q '^%s=' "$f" || echo '%s=%s' >> "$f"; else echo '%s=%s' > "$f"; fi]],

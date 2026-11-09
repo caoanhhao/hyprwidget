@@ -152,7 +152,7 @@ end
 
 local function pinned_path(img)
   local base = M.image_path(img):match("([^/]+)$"):gsub("%.[^.]+$", "")
-  return HOME .. "/.config/fastfetch/cache/" .. base .. ".webp"
+  return require("lib.paths").fastfetch_cache .. "/" .. base .. ".webp"
 end
 
 function M.is_pinned(img)
@@ -170,7 +170,7 @@ function M.pin_to_terminal(img, cb)
   if common.file_exists(target) then
     cmd = { "rm", "-f", target }
   else
-    os.execute("mkdir -p " .. q(HOME .. "/.config/fastfetch/cache"))
+    os.execute("mkdir -p " .. q(require("lib.paths").fastfetch_cache))
     local r = "%[fx:min(w,h)*0.05]"
     cmd = {
       "magick", M.image_path(img), "-alpha", "set", "(", "+clone", "-alpha", "transparent",
@@ -225,7 +225,8 @@ function M.open_in_browser(img)
 end
 
 function M.add_to_wallpapers(img)
-  local dir = HOME .. "/.config/wallpapers/custom"
+  local dir = require("lib.paths").wallpapers .. "/custom"
+  os.execute("mkdir -p " .. q(dir))
   hw.exec_async({ "cp", M.image_path(img), dir .. "/" .. img.id .. "." .. (img.extension or "jpg") }, function(_, err)
     common.notify(err and "Error adding to wallpapers" or "Success", err or "Media added to wallpapers")
   end)
