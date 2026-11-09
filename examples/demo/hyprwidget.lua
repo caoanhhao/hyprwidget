@@ -9,6 +9,7 @@ require_all({
   "services",
   "notifications",
   "launcher",
+  "panels",
 })
 
 require_custom_dir()
