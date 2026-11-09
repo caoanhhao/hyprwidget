@@ -49,19 +49,32 @@ fn unwrap_setting(v: &Value) -> Value {
     }
 }
 
+/// `v` as an object, replacing it with `{}` if it is anything else.
+fn as_object(v: &mut Value) -> &mut Map<String, Value> {
+    if !v.is_object() {
+        *v = json!({});
+    }
+    match v {
+        Value::Object(m) => m,
+        _ => unreachable!(),
+    }
+}
+
 /// Checks `value` against an `AGSSetting`'s `type`/`min`/`max`; numbers are
 /// clamped.
 pub fn validate(meta: &Value, value: Value) -> Result<Value> {
     let ty = meta["type"].as_str().unwrap_or("");
-    let clamp = |x: f64| {
-        let lo = meta["min"].as_f64().unwrap_or(f64::NEG_INFINITY);
-        let hi = meta["max"].as_f64().unwrap_or(f64::INFINITY);
-        x.clamp(lo, hi)
-    };
+    let lo = meta["min"].as_f64().unwrap_or(f64::NEG_INFINITY);
+    let hi = meta["max"].as_f64().unwrap_or(f64::INFINITY);
+    if lo > hi {
+        bail!("invalid bounds: min {lo} > max {hi}");
+    }
+    let clamp = |x: f64| x.clamp(lo, hi);
     Ok(match ty {
-        "int" => match value.as_f64() {
-            Some(x) => json!(clamp(x.round()) as i64),
-            None => bail!("expected int, got {value}"),
+        "int" => match value.as_f64().map(|x| clamp(x.round())) {
+            // `i64::MAX as f64` rounds up to 2^63, hence the strict bound.
+            Some(x) if x >= i64::MIN as f64 && x < i64::MAX as f64 => json!(x as i64),
+            _ => bail!("expected int, got {value}"),
         },
         "float" => match value.as_f64() {
             Some(x) => json!(clamp(x)),
@@ -128,19 +141,12 @@ impl Settings {
             let mut data = self.data.borrow_mut();
             let mut cur = &mut *data;
             for k in parents {
-                if !cur.is_object() || is_setting(cur) {
-                    *cur = Value::Object(Map::new());
+                if is_setting(cur) {
+                    *cur = json!({});
                 }
-                cur = cur
-                    .as_object_mut()
-                    .unwrap()
-                    .entry(*k)
-                    .or_insert_with(|| json!({}));
+                cur = as_object(cur).entry(*k).or_insert_with(|| json!({}));
             }
-            if !cur.is_object() {
-                *cur = json!({});
-            }
-            let obj = cur.as_object_mut().unwrap();
+            let obj = as_object(cur);
             match obj.get_mut(*last) {
                 Some(leaf) if is_setting(leaf) => {
                     let v = validate(leaf, value).with_context(|| format!("setting '{key}'"))?;
@@ -278,6 +284,28 @@ mod tests {
             json!("Rounding")
         );
         assert_eq!(back["bar"]["lock"], json!(true));
+    }
+
+    #[test]
+    fn validate_rejects_bad_bounds_and_range() {
+        let inverted = json!({"type":"int","min":10,"max":0,"value":5});
+        assert!(validate(&inverted, json!(5)).is_err());
+        let int = json!({"type":"int","value":0});
+        assert!(validate(&int, json!(1e300)).is_err());
+        assert_eq!(validate(&int, json!(-3.6)).unwrap(), json!(-4));
+    }
+
+    #[test]
+    fn set_with_inverted_bounds_errors() {
+        let p = tmp("inverted");
+        std::fs::write(&p, r#"{"x":{"value":5,"min":10,"max":0,"type":"int"}}"#).unwrap();
+        let ctx = glib::MainContext::new();
+        ctx.with_thread_default(|| {
+            let s = Settings::load(&p).unwrap();
+            assert!(s.set("x", json!(3)).is_err());
+            assert_eq!(s.get("x"), json!(5));
+        })
+        .unwrap();
     }
 
     #[test]

@@ -488,20 +488,24 @@ fn pixmap_file(v: &Value) -> Option<String> {
     let Value::Array(a) = unwrap_variant(v) else {
         return None;
     };
-    let (w, h, argb) = a
+    let (w, h, stride, len, argb) = a
         .iter()
         .filter_map(|p| {
             let Value::Structure(s) = unwrap_variant(p) else {
                 return None;
             };
             let f = s.fields();
-            let (w, h) = (v_i64(f.first()?)? as i32, v_i64(f.get(1)?)? as i32);
+            let w = i32::try_from(v_i64(f.first()?)?).ok().filter(|&w| w > 0)?;
+            let h = i32::try_from(v_i64(f.get(1)?)?).ok().filter(|&h| h > 0)?;
+            // Untrusted sizes: the rowstride must fit i32, the byte count usize.
+            let stride = w.checked_mul(4)?;
+            let len = (stride as usize).checked_mul(h as usize)?;
             let data = v_bytes(f.get(2)?)?;
-            (w > 0 && h > 0 && data.len() >= (w * h * 4) as usize).then_some((w, h, data))
+            (data.len() >= len).then_some((w, h, stride, len, data))
         })
-        .max_by_key(|(w, h, _)| w * h)?;
-    let rgba = argb_to_rgba(&argb[..(w * h * 4) as usize]);
-    dbus::save_png(&dbus::runtime_dir("tray"), rgba, true, w, h, w * 4)
+        .max_by_key(|(_, _, _, len, _)| *len)?;
+    let rgba = argb_to_rgba(&argb[..len]);
+    dbus::save_png(&dbus::runtime_dir("tray"), rgba, true, w, h, stride)
         .map(|p| p.to_string_lossy().into_owned())
 }
 
@@ -524,6 +528,19 @@ mod tests {
             argb_to_rgba(&[0xff, 1, 2, 3, 0x80, 4, 5, 6]),
             vec![1, 2, 3, 0xff, 4, 5, 6, 0x80]
         );
+    }
+
+    #[test]
+    fn oversized_pixmaps_skipped() {
+        // Dimensions whose byte count or rowstride overflow, or that don't
+        // fit i32 at all, are dropped instead of panicking.
+        let v = Value::from(vec![
+            (40000i64, 40000i64, vec![0u8; 16]),
+            (i64::from(i32::MAX), 2, vec![0u8; 16]),
+            (1i64 << 32, 1, vec![0u8; 16]),
+            (-2, -2, vec![0u8; 16]),
+        ]);
+        assert_eq!(pixmap_file(&v), None);
     }
 
     #[test]

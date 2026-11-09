@@ -14,7 +14,11 @@ use std::time::Duration;
 type Callback<T> = Rc<dyn Fn(&T)>;
 
 struct Inner<T> {
-    value: RefCell<T>,
+    /// Behind an `Rc` so readers can drop the borrow before calling out,
+    /// letting callbacks set this same signal.
+    value: RefCell<Rc<T>>,
+    /// Bumped on every write; lets `notify` stop delivering a stale value.
+    version: Cell<u64>,
     subs: RefCell<Vec<(u64, Callback<T>)>>,
     next_id: Cell<u64>,
     /// Things whose lifetime is tied to this signal: dependency
@@ -36,7 +40,7 @@ impl<T> Clone for Signal<T> {
 impl<T: fmt::Debug> fmt::Debug for Signal<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Signal")
-            .field(&*self.0.value.borrow())
+            .field(&**self.0.value.borrow())
             .finish()
     }
 }
@@ -98,7 +102,8 @@ pub fn untracked<R>(f: impl FnOnce() -> R) -> R {
 impl<T: 'static> Signal<T> {
     pub fn new(value: T) -> Self {
         Self(Rc::new(Inner {
-            value: RefCell::new(value),
+            value: RefCell::new(Rc::new(value)),
+            version: Cell::new(0),
             subs: RefCell::new(Vec::new()),
             next_id: Cell::new(0),
             keep: RefCell::new(Vec::new()),
@@ -109,7 +114,8 @@ impl<T: 'static> Signal<T> {
     /// a computed.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
         track(self.0.clone());
-        f(&self.0.value.borrow())
+        let value = self.0.value.borrow().clone();
+        f(&value)
     }
 
     /// Calls `f` with the new value on every change. The subscription ends
@@ -129,14 +135,13 @@ impl<T: 'static> Signal<T> {
 
     /// Replaces the value and notifies subscribers unconditionally.
     pub fn replace(&self, value: T) {
-        *self.0.value.borrow_mut() = value;
+        *self.0.value.borrow_mut() = Rc::new(value);
+        self.bump();
         self.notify();
     }
 
-    /// Mutates the value in place and notifies subscribers.
-    pub fn update(&self, f: impl FnOnce(&mut T)) {
-        f(&mut self.0.value.borrow_mut());
-        self.notify();
+    fn bump(&self) {
+        self.0.version.set(self.0.version.get() + 1);
     }
 
     /// Notifies subscribers with the current value.
@@ -152,8 +157,13 @@ impl<T: 'static> Signal<T> {
         if subs.is_empty() {
             return;
         }
-        let value = self.0.value.borrow();
+        let value = self.0.value.borrow().clone();
+        let version = self.0.version.get();
         for f in subs {
+            // A callback set a newer value, and its own notify delivered it.
+            if self.0.version.get() != version {
+                break;
+            }
             f(&value);
         }
     }
@@ -184,7 +194,15 @@ impl<T: Clone + 'static> Signal<T> {
 
     /// Returns a copy of the current value without tracking.
     pub fn peek(&self) -> T {
-        self.0.value.borrow().clone()
+        T::clone(&self.0.value.borrow())
+    }
+
+    /// Mutates the value in place and notifies subscribers. Clones the value
+    /// first only if a callback is still holding the old one.
+    pub fn update(&self, f: impl FnOnce(&mut T)) {
+        f(Rc::make_mut(&mut self.0.value.borrow_mut()));
+        self.bump();
+        self.notify();
     }
 
     /// Derives a new signal; shorthand for `computed(|| f(&self.get()))`.
@@ -197,7 +215,7 @@ impl<T: Clone + 'static> Signal<T> {
 impl<T: PartialEq + 'static> Signal<T> {
     /// Sets the value, notifying subscribers only if it changed.
     pub fn set(&self, value: T) {
-        if *self.0.value.borrow() == value {
+        if **self.0.value.borrow() == value {
             return;
         }
         self.replace(value);
@@ -454,6 +472,44 @@ mod tests {
         let _s = a.subscribe(move |v| b2.set(*v * 3));
         a.set(4);
         assert_eq!(b.get(), 12);
+    }
+
+    #[test]
+    fn subscriber_may_set_own_signal() {
+        let s = Signal::new(0);
+        let s2 = s.clone();
+        let _sub = s.subscribe(move |v| {
+            if *v > 10 {
+                s2.set(10)
+            }
+        });
+        s.set(20);
+        assert_eq!(s.peek(), 10);
+    }
+
+    #[test]
+    fn with_may_set_own_signal() {
+        let s = Signal::new(1);
+        s.with(|v| s.set(*v + 1));
+        assert_eq!(s.peek(), 2);
+        s.update(|v| *v += 1);
+        assert_eq!(s.peek(), 3);
+    }
+
+    #[test]
+    fn later_subscribers_see_only_final_value() {
+        let s = Signal::new(0);
+        let s2 = s.clone();
+        let _clamp = s.subscribe(move |v| {
+            if *v > 10 {
+                s2.set(10)
+            }
+        });
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let seen2 = seen.clone();
+        let _log = s.subscribe(move |v| seen2.borrow_mut().push(*v));
+        s.set(20);
+        assert_eq!(*seen.borrow(), [10]);
     }
 
     #[test]

@@ -177,8 +177,13 @@ pub fn save_png(
         return None;
     }
     let channels = if has_alpha { 4 } else { 3 };
-    let min_len = (rowstride as usize) * (height as usize - 1) + width as usize * channels;
-    if rgba.len() < min_len {
+    // Values come off the bus: reject rows narrower than a pixel row and
+    // sizes that overflow instead of handing GdkPixbuf inconsistent geometry.
+    let row = (width as usize).checked_mul(channels)?;
+    let min_len = (rowstride as usize)
+        .checked_mul(height as usize - 1)?
+        .checked_add(row)?;
+    if (rowstride as usize) < row || rgba.len() < min_len {
         return None;
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -288,5 +293,23 @@ pub fn v_dict<'a, 'v>(v: &'a Value<'v>) -> std::collections::HashMap<String, &'a
             .filter_map(|(k, v)| Some((v_str(k)?, unwrap_variant(v))))
             .collect(),
         _ => Default::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_png_rejects_bad_geometry() {
+        let dir = std::env::temp_dir();
+        // Rowstride narrower than a row of pixels.
+        assert_eq!(save_png(&dir, vec![0; 64], true, 4, 2, 1), None);
+        assert_eq!(save_png(&dir, vec![0; 64], false, 4, 2, 11), None);
+        // Huge width with a tiny rowstride must not pass the length check.
+        assert_eq!(save_png(&dir, vec![0; 64], true, i32::MAX, 1, 1), None);
+        // Too short for the claimed size.
+        assert_eq!(save_png(&dir, vec![0; 31], true, 4, 2, 16), None);
+        assert_eq!(save_png(&dir, vec![0; 8], true, 0, 2, 16), None);
     }
 }

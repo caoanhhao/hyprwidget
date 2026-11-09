@@ -290,7 +290,8 @@ impl EmbedView {
             .borrow()
             .as_ref()
             .is_some_and(|s| s.close_session(id));
-        if !asked {
+        // In socket mode the session can outlive the reaped child; its pid may be reused.
+        if !asked && alive.get() {
             process::signal(pid, libc::SIGTERM);
         }
         let a = alive.clone();
