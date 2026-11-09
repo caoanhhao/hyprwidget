@@ -4,6 +4,7 @@
 //! See `PLAN.md` §6, `docs/embed-spike.md` (M0.5) and `docs/embed.md` (M5).
 
 mod buffer;
+mod cast;
 mod clipboard;
 mod input;
 mod popup;

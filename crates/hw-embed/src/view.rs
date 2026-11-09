@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 use gtk4::subclass::prelude::*;
 use gtk4::{glib, graphene, gsk, prelude::*};
 
-use crate::process::{self, SocketGuard};
-use crate::server::{EmbedServer, ViewId};
+use crate::cast;
+use crate::process::{self, Connection, SocketGuard};
+use crate::server::{EmbedServer, ToplevelKind, ViewId};
 use crate::surface::SurfaceView;
 
 /// How the app's size follows the widget.
@@ -127,11 +128,15 @@ impl EmbedView {
     pub fn set_mode(&self, mode: Mode) {
         self.imp().config.borrow_mut().mode = mode;
         for sv in self.imp().toplevels.borrow().iter() {
-            sv.set_scale_mode(mode == Mode::Scale);
+            sv.set_scale_mode(mode);
         }
         self.queue_resize();
     }
 
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "public setter used by hw-ui (W.App property); signature kept stable"
+    )]
     pub fn set_keep_alive(&self, on: bool) {
         self.imp().config.borrow_mut().keep_alive = on;
     }
@@ -140,12 +145,20 @@ impl EmbedView {
         self.imp().config.borrow_mut().restart = policy;
     }
 
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "public setter used by hw-ui (W.App property); signature kept stable"
+    )]
     pub fn set_frame_when_hidden(&self, on: bool) {
         self.imp().config.borrow_mut().frame_when_hidden = on;
     }
 
     /// Socket mode (`WAYLAND_DISPLAY=hyprwidget-embed-N`) for apps that open
     /// several connections or fork; takes effect on the next start.
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "public setter used by hw-ui (W.App property); signature kept stable"
+    )]
     pub fn set_socket(&self, on: bool) {
         self.imp().config.borrow_mut().socket = on;
     }
@@ -213,7 +226,12 @@ impl EmbedView {
             }
         };
         let id = server.open_session(self);
-        let spawned = match process::spawn(&server, id, &cfg.command, &cfg.env, cfg.socket) {
+        let connection = if cfg.socket {
+            Connection::Listener
+        } else {
+            Connection::Inherited
+        };
+        let spawned = match process::spawn(&server, id, &cfg.command, &cfg.env, connection) {
             Ok(s) => s,
             Err(e) => {
                 server.drop_session(id);
@@ -223,8 +241,8 @@ impl EmbedView {
             }
         };
         let alive = Rc::new(Cell::new(true));
-        let (weak, a, srv) = (self.downgrade(), alive.clone(), server.clone());
-        glib::child_watch_add_local(glib::Pid(spawned.pid as i32), move |_, status| {
+        let (weak, a, srv) = (self.downgrade(), Rc::clone(&alive), server.clone());
+        glib::child_watch_add_local(glib::Pid(spawned.pid.cast_signed()), move |_, status| {
             a.set(false);
             let code = process::exit_code(status);
             match weak.upgrade() {
@@ -274,14 +292,14 @@ impl EmbedView {
             .toplevels
             .borrow()
             .last()
-            .is_some_and(|sv| sv.grab_focus())
+            .is_some_and(WidgetExt::grab_focus)
     }
 
     fn stop(&self) {
         let imp = self.imp();
         let Some((id, pid, alive)) = imp.session.borrow_mut().as_mut().map(|s| {
             s.stopping = true;
-            (s.id, s.pid, s.alive.clone())
+            (s.id, s.pid, Rc::clone(&s.alive))
         }) else {
             return;
         };
@@ -294,7 +312,7 @@ impl EmbedView {
         if !asked && alive.get() {
             process::signal(pid, libc::SIGTERM);
         }
-        let a = alive.clone();
+        let a = alive;
         glib::timeout_add_local_once(CLOSE_TIMEOUT, move || {
             if a.get() {
                 tracing::info!(pid, "embedded app did not close; SIGTERM");
@@ -420,8 +438,7 @@ impl EmbedView {
     pub(crate) fn scale(&self) -> f64 {
         self.native()
             .and_then(|n| n.surface())
-            .map(|s| s.scale())
-            .unwrap_or_else(|| self.scale_factor() as f64)
+            .map_or_else(|| f64::from(self.scale_factor()), |s| s.scale())
     }
 
     /// Size to configure the main toplevel with.
@@ -440,9 +457,13 @@ impl EmbedView {
         }
     }
 
-    pub(crate) fn add_toplevel(&self, sv: &SurfaceView, dialog: bool) {
-        sv.set_scale_mode(self.imp().config.borrow().mode == Mode::Scale && !dialog);
-        sv.set_centered(dialog);
+    pub(crate) fn add_toplevel(&self, sv: &SurfaceView, kind: ToplevelKind) {
+        if kind == ToplevelKind::Dialog {
+            sv.set_scale_mode(Mode::Resize);
+            sv.center();
+        } else {
+            sv.set_scale_mode(self.imp().config.borrow().mode);
+        }
         sv.set_parent(self);
         self.imp().toplevels.borrow_mut().push(sv.clone());
         self.content_changed();
@@ -482,7 +503,7 @@ impl EmbedView {
             .toplevels
             .borrow()
             .iter()
-            .any(|t| t.has_content());
+            .any(SurfaceView::has_content);
         self.imp().placeholder.set_visible(!shown);
     }
 
@@ -496,7 +517,7 @@ impl EmbedView {
         if self.is_mapped() {
             let id = self.add_tick_callback(|view, clock| {
                 view.imp().tick.take();
-                view.frame_done((clock.frame_time() / 1000) as u32);
+                view.frame_done(cast::time_ms(clock.frame_time()));
                 glib::ControlFlow::Break
             });
             imp.tick.replace(Some(id));
@@ -508,7 +529,7 @@ impl EmbedView {
                     self,
                     move || {
                         view.imp().timer.take();
-                        view.frame_done((glib::monotonic_time() / 1000) as u32);
+                        view.frame_done(cast::time_ms(glib::monotonic_time()));
                     }
                 ),
             );
@@ -538,7 +559,13 @@ impl EmbedView {
 }
 
 mod imp {
-    use super::*;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+
+    use super::{
+        Cell, Config, EmbedServer, ExitCallback, HIDE_GRACE, PidCallback, RefCell, Session,
+        StrCallback, SurfaceView, cast, glib, graphene, gsk,
+    };
 
     #[derive(Default)]
     pub struct EmbedView {
@@ -561,6 +588,16 @@ mod imp {
         pub(super) on_app_id: RefCell<Vec<StrCallback>>,
         pub(super) on_exit: RefCell<Vec<ExitCallback>>,
         pub(super) on_pid: RefCell<Vec<PidCallback>>,
+    }
+
+    impl std::fmt::Debug for EmbedView {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("EmbedView")
+                .field("config", &self.config)
+                .field("title", &self.title)
+                .field("app_id", &self.app_id)
+                .finish_non_exhaustive()
+        }
     }
 
     #[glib::object_subclass]
@@ -636,15 +673,10 @@ mod imp {
                 return (pmin.min(v), v, -1, -1);
             }
             // Otherwise follow the app's own size.
-            let app = self
-                .toplevels
-                .borrow()
-                .first()
-                .map(|sv| {
-                    let g = sv.geometry();
-                    if horizontal { g.w } else { g.h }
-                })
-                .unwrap_or(0);
+            let app = self.toplevels.borrow().first().map_or(0, |sv| {
+                let g = sv.geometry();
+                if horizontal { g.w } else { g.h }
+            });
             (pmin, app.max(pnat), -1, -1)
         }
 
@@ -660,10 +692,11 @@ mod imp {
 
         fn snapshot(&self, snapshot: &gtk4::Snapshot) {
             let obj = self.obj();
-            let radius = self.config.borrow().rounding as f32;
+            let radius = cast::gsk(self.config.borrow().rounding);
             let clip = radius > 0.0;
             if clip {
-                let rect = graphene::Rect::new(0.0, 0.0, obj.width() as f32, obj.height() as f32);
+                let (w, h) = (f64::from(obj.width()), f64::from(obj.height()));
+                let rect = graphene::Rect::new(0.0, 0.0, cast::gsk(w), cast::gsk(h));
                 snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, radius));
             }
             let mut child = obj.first_child();

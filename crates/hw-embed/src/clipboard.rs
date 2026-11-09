@@ -70,7 +70,7 @@ impl Clipboards {
             .formats()
             .mime_types()
             .iter()
-            .map(|m| m.to_string())
+            .map(ToString::to_string)
             .collect();
         match (target, mimes.is_empty()) {
             (SelectionTarget::Clipboard, false) => set_data_device_selection(dh, seat, mimes, ()),
@@ -147,8 +147,11 @@ fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } == -1 {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: both fds were just created and are owned by nobody else.
-    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+    // SAFETY: the read end was just created and is owned by nobody else.
+    let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    // SAFETY: the write end was just created and is owned by nobody else.
+    let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+    Ok((read, write))
 }
 
 glib::wrapper! {
@@ -171,7 +174,13 @@ mod imp {
     use std::future::Future;
     use std::pin::Pin;
 
-    use super::*;
+    use gtk4::gdk::subclass::prelude::*;
+    use gtk4::prelude::*;
+
+    use super::{
+        EmbedServer, Read, SelectionTarget, gdk, gio, glib, pipe,
+        request_data_device_client_selection, request_primary_client_selection,
+    };
 
     #[derive(Default)]
     pub(crate) struct ClientContent {

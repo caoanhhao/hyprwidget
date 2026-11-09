@@ -8,7 +8,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Rectangle};
 use smithay::wayland::shell::xdg::{PopupSurface, PositionerState};
 
-use crate::server::{EmbedServer, State, ViewId};
+use crate::cast;
+use crate::server::{EmbedServer, State, ViewId, view_of};
 use crate::surface::SurfaceView;
 
 pub(crate) struct Popup {
@@ -51,14 +52,14 @@ impl Popup {
     fn place(&self) {
         let pg = self.parent.geometry();
         let (x, y) = self.parent.tree_to_widget(
-            (pg.x + self.geometry.loc.x) as f64,
-            (pg.y + self.geometry.loc.y) as f64,
+            f64::from(pg.x + self.geometry.loc.x),
+            f64::from(pg.y + self.geometry.loc.y),
         );
         // Bottom + halign start: the popover's top-left sits at the
         // rectangle's bottom-left corner.
         self.popover.set_pointing_to(Some(&gdk::Rectangle::new(
-            x.round() as i32,
-            y.round() as i32 - 1,
+            cast::px(x.round()),
+            cast::px(y.round()) - 1,
             1,
             1,
         )));
@@ -69,34 +70,40 @@ impl Popup {
         self.popover.set_autohide(true);
     }
 
-    /// First buffer → show; buffer removed → hide (from an idle: popping up
-    /// moves focus, which calls back into the server).
-    pub(crate) fn set_mapped(&mut self, mapped: bool) {
-        if self.mapped == mapped {
+    /// First buffer → show (from an idle: popping up moves focus, which
+    /// calls back into the server).
+    pub(crate) fn map(&mut self) {
+        if self.mapped {
             return;
         }
-        self.mapped = mapped;
+        self.mapped = true;
         let (popover, sv, grab) = (self.popover.clone(), self.sv.clone(), self.grab);
         glib::idle_add_local_once(move || {
-            if !mapped {
-                popover.popdown();
-                return;
-            }
             popover.popup();
             if grab {
                 sv.grab_focus();
             }
         });
     }
+
+    /// Buffer removed → hide (from an idle, like `map`).
+    pub(crate) fn unmap(&mut self) {
+        if !self.mapped {
+            return;
+        }
+        self.mapped = false;
+        let popover = self.popover.clone();
+        glib::idle_add_local_once(move || popover.popdown());
+    }
 }
 
 impl State {
-    pub(crate) fn popup_new(&mut self, surface: PopupSurface, positioner: PositionerState) {
+    pub(crate) fn popup_new(&mut self, surface: &PopupSurface, positioner: PositionerState) {
         let Some(server) = EmbedServer::current() else {
             return;
         };
         let (Some(view), Some(parent)) = (
-            self.view_of(surface.wl_surface()),
+            view_of(surface.wl_surface()),
             surface.get_parent_surface().and_then(|p| self.sv_of(&p)),
         ) else {
             tracing::debug!("xdg_popup without a known parent");
@@ -144,7 +151,7 @@ impl State {
 
     pub(crate) fn popup_reposition(
         &mut self,
-        surface: PopupSurface,
+        surface: &PopupSurface,
         positioner: PositionerState,
         token: u32,
     ) {

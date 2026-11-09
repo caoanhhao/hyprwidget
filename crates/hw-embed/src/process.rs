@@ -29,9 +29,7 @@ impl Drop for SocketGuard {
 }
 
 fn runtime_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
+    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
 }
 
 /// Binds the first free `hyprwidget-embed-N`, removing stale sockets.
@@ -48,11 +46,20 @@ fn bind_socket() -> io::Result<(String, PathBuf, UnixListener)> {
         }
         match UnixListener::bind(&path) {
             Ok(l) => return Ok((name, path, l)),
-            Err(e) if e.kind() == io::ErrorKind::AddrInUse => continue,
+            Err(e) if e.kind() == io::ErrorKind::AddrInUse => {}
             Err(e) => return Err(e),
         }
     }
     Err(io::Error::other("no free hyprwidget-embed-N socket"))
+}
+
+/// How the client reaches the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Connection {
+    /// One pre-connected `WAYLAND_SOCKET`.
+    Inherited,
+    /// A listening `WAYLAND_DISPLAY` socket, for several connections.
+    Listener,
 }
 
 pub(crate) struct Spawned {
@@ -67,13 +74,14 @@ pub(crate) fn spawn(
     id: ViewId,
     argv: &[String],
     env: &[(String, String)],
-    socket: bool,
+    connection: Connection,
 ) -> anyhow::Result<Spawned> {
-    let (program, args) = argv
+    let socket = connection == Connection::Listener;
+    let (program, program_args) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("empty command"))?;
     let mut cmd = Command::new(program);
-    cmd.args(args)
+    cmd.args(program_args)
         .env("GDK_BACKEND", "wayland")
         .env("QT_QPA_PLATFORM", "wayland")
         .env("SDL_VIDEODRIVER", "wayland")
@@ -88,14 +96,17 @@ pub(crate) fn spawn(
         .env_remove("WAYLAND_DISPLAY")
         .process_group(0);
     cmd.envs(env.iter().map(|(k, v)| (k, v)));
-    // SAFETY: only async-signal-safe prctl between fork and exec. The app
-    // must not outlive hyprwidget (socket-mode apps survive a lost display).
-    unsafe {
-        cmd.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        });
-    }
+    // The app must not outlive hyprwidget (socket-mode apps survive a lost
+    // display).
+    let pdeathsig = || {
+        // SAFETY: prctl(PR_SET_PDEATHSIG) takes no pointers and is
+        // async-signal-safe.
+        unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
+        Ok(())
+    };
+    // SAFETY: the hook only calls async-signal-safe prctl between fork and
+    // exec, and touches no memory shared with the parent.
+    unsafe { cmd.pre_exec(pdeathsig) };
 
     let mut guard = None;
     let mut client_end = None;
@@ -131,15 +142,16 @@ pub(crate) fn spawn(
         server.connect(id, server_end)?;
         let fd = client.as_raw_fd();
         cmd.env("WAYLAND_SOCKET", fd.to_string());
-        // SAFETY: only async-signal-safe fcntl between fork and exec.
-        unsafe {
-            cmd.pre_exec(move || {
-                if libc::fcntl(fd, libc::F_SETFD, 0) == -1 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        let keep_fd = move || {
+            // SAFETY: fcntl(F_SETFD) on an fd we own; async-signal-safe.
+            if unsafe { libc::fcntl(fd, libc::F_SETFD, 0) } == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        };
+        // SAFETY: the hook only calls async-signal-safe fcntl between fork
+        // and exec; `fd` stays open until after `spawn`.
+        unsafe { cmd.pre_exec(keep_fd) };
         client_end = Some(client);
     }
     let child = cmd.spawn()?;
@@ -158,11 +170,10 @@ pub(crate) fn signal(pid: u32, sig: i32) {
         tracing::warn!(pid, "refusing to signal invalid pid");
         return;
     };
-    // SAFETY: plain kill(2); `pid > 0`, so neither call targets our own group.
-    unsafe {
-        if libc::kill(-pid, sig) == -1 {
-            libc::kill(pid, sig);
-        }
+    // SAFETY: plain kill(2); `pid > 0`, so `-pid` is the app's group, not ours.
+    if unsafe { libc::kill(-pid, sig) } == -1 {
+        // SAFETY: plain kill(2); `pid > 0` targets that single process.
+        unsafe { libc::kill(pid, sig) };
     }
 }
 
