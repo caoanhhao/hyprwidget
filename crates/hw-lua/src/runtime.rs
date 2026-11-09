@@ -977,7 +977,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     let json = lua.create_table()?;
     json.set(
         "decode",
-        lua.create_function(|lua, text: mlua::String| {
+        lua.create_function(|lua, text: mlua::LuaString| {
             let v: serde_json::Value = serde_json::from_slice(&text.as_bytes())
                 .map_err(|e| mlua::Error::runtime(format!("hw.json.decode: {e}")))?;
             json_to_lua(lua, &v)
