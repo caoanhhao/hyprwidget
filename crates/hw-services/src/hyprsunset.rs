@@ -8,7 +8,7 @@
 //! s.temperature()          -- Kelvin, nil if hyprsunset isn't running
 //! s:set_temperature(4500)  -- also leaves identity mode
 //! s:set_gamma(90)          -- percent
-//! s:identity()             -- no filter (s.identity() tracks it)
+//! s:set_identity()         -- no filter (s.identity() tracks it)
 //! ```
 
 use std::io::{Read, Write};
@@ -47,7 +47,7 @@ pub fn start() -> Result<Rc<Service>> {
             Ok(Value::Null)
         });
         let w = weak.clone();
-        svc.method("identity", move |_| {
+        svc.method("set_identity", move |_| {
             request("identity")?;
             set_identity(&w, true);
             refresh(&w);

@@ -183,7 +183,7 @@ fn reader(enabled: &AtomicBool, pusher: &Pusher) {
         pusher.set("error", json!(format!("xkb keymap {l}/{v} failed")));
         return;
     };
-    let mut state = xkb::State::new(&keymap);
+    let mut decoder = Decoder(xkb::State::new(&keymap));
     let mut open: Vec<Open> = Vec::new();
     let mut last_scan: Option<Instant> = None;
     let mut buf = [0u8; 24 * 64];
@@ -245,41 +245,50 @@ fn reader(enabled: &AtomicBool, pusher: &Pusher) {
             let Ok(len) = open[i].file.read(&mut buf) else {
                 continue;
             };
-            for ev in buf[..len].as_chunks::<24>().0 {
-                let ty = u16::from_ne_bytes([ev[16], ev[17]]);
-                let code = u16::from_ne_bytes([ev[18], ev[19]]);
-                let value = i32::from_ne_bytes([ev[20], ev[21], ev[22], ev[23]]);
-                if ty != EV_KEY || value == 2 {
-                    continue;
+            for name in decoder.feed(&buf[..len]) {
+                if enabled.load(Ordering::SeqCst)
+                    && !pusher.emit("key", json!({ "label": label(&name), "keysym": name }))
+                {
+                    return;
                 }
-                let kc = xkb::Keycode::new(u32::from(code) + 8);
-                if value == 1 {
-                    let sym = state.key_get_one_sym(kc);
-                    let name = xkb::keysym_get_name(sym);
-                    if !name.is_empty()
-                        && name != "NoSymbol"
-                        && enabled.load(Ordering::SeqCst)
-                        && !pusher.emit(
-                            "key",
-                            json!({ "label": label(&name), "keysym": name, "code": code }),
-                        )
-                    {
-                        return;
-                    }
-                }
-                state.update_key(
-                    kc,
-                    if value == 1 {
-                        xkb::KeyDirection::Down
-                    } else {
-                        xkb::KeyDirection::Up
-                    },
-                );
             }
         }
         for i in gone.into_iter().rev() {
             open.remove(i);
         }
+    }
+}
+
+/// Turns raw `struct input_event`s (24 bytes on 64-bit) into the keysym
+/// names of key presses, tracking modifiers.
+struct Decoder(xkb::State);
+
+impl Decoder {
+    fn feed(&mut self, buf: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        for ev in buf.as_chunks::<24>().0 {
+            let ty = u16::from_ne_bytes([ev[16], ev[17]]);
+            let code = u16::from_ne_bytes([ev[18], ev[19]]);
+            let value = i32::from_ne_bytes([ev[20], ev[21], ev[22], ev[23]]);
+            // value: 1 press, 0 release, 2 autorepeat (ignored).
+            if ty != EV_KEY || value == 2 {
+                continue;
+            }
+            let kc = xkb::Keycode::new(u32::from(code) + 8);
+            if value == 1 {
+                let name = xkb::keysym_get_name(self.0.key_get_one_sym(kc));
+                if !name.is_empty() && name != "NoSymbol" {
+                    out.push(name);
+                }
+            }
+            let dir = if value == 1 {
+                xkb::KeyDirection::Down
+            } else {
+                xkb::KeyDirection::Up
+            };
+            self.0.update_key(kc, dir);
+        }
+        out
     }
 }
 
@@ -322,6 +331,46 @@ I: Bus=0003\nN: Name=\"Mouse\"\nH: Handlers=event13 mouse0 \nB: EV=17\n";
         assert_eq!(k[0].path, PathBuf::from("/dev/input/event7"));
         assert!(!has_bit("8000 10000000000000 0", KEY_A));
         assert!(has_bit("8000 10000000000000 0", 116)); // KEY_POWER
+    }
+
+    fn ev(ty: u16, code: u16, value: i32) -> Vec<u8> {
+        let mut b = vec![0u8; 16];
+        b.extend(ty.to_ne_bytes());
+        b.extend(code.to_ne_bytes());
+        b.extend(value.to_ne_bytes());
+        b
+    }
+
+    #[test]
+    fn decodes_presses_with_modifiers() {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let Some(km) = xkb::Keymap::new_from_names(
+            &ctx,
+            "evdev",
+            "pc105",
+            "us",
+            "",
+            None,
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        ) else {
+            return; // no xkb data on this machine
+        };
+        let mut d = Decoder(xkb::State::new(&km));
+        let mut buf = Vec::new();
+        for (c, v) in [
+            (30, 1),
+            (30, 0),
+            (42, 1),
+            (30, 1),
+            (30, 2),
+            (30, 0),
+            (42, 0),
+            (28, 1),
+        ] {
+            buf.extend(ev(EV_KEY, c, v));
+            buf.extend(ev(0, 0, 0)); // SYN_REPORT
+        }
+        assert_eq!(d.feed(&buf), ["a", "Shift_L", "A", "Return"]);
     }
 
     #[test]
