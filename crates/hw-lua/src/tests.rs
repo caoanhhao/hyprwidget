@@ -186,3 +186,19 @@ fn demo_config_loads_headless() {
     );
     assert_eq!(core.options.get("general:gaps_in"), json!(4));
 }
+
+#[test]
+fn json_helpers() {
+    let dir = config_dir("json", &[("hyprwidget.lua", "")]);
+    let (_core, rt) = load(dir, None);
+    let out = rt
+        .eval(
+            r#"(function()
+                local t = hw.json.decode('{"a": [1, 2, {"b": "x"}], "n": null}')
+                return t.a[3].b .. #t.a .. tostring(t.n) .. hw.json.encode({ k = "v" })
+            end)()"#,
+        )
+        .unwrap();
+    assert_eq!(out, r#"x3nil{"k":"v"}"#);
+    assert!(rt.eval("hw.json.decode('{')").is_err());
+}

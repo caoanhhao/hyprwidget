@@ -941,6 +941,30 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     )?;
     hw.set("opt", OptProxy(Vec::new()))?;
     hw.set("settings", SettingsUd)?;
+
+    // hw.json.decode(text) / hw.json.encode(value [, pretty])
+    let json = lua.create_table()?;
+    json.set(
+        "decode",
+        lua.create_function(|lua, text: String| {
+            let v: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|e| mlua::Error::runtime(format!("hw.json.decode: {e}")))?;
+            json_to_lua(lua, &v)
+        })?,
+    )?;
+    json.set(
+        "encode",
+        lua.create_function(|lua, (v, pretty): (Value, Option<bool>)| {
+            let v = lua_to_json(lua, v)?;
+            let out = if pretty.unwrap_or(false) {
+                serde_json::to_string_pretty(&v)
+            } else {
+                serde_json::to_string(&v)
+            };
+            out.map_err(|e| mlua::Error::runtime(format!("hw.json.encode: {e}")))
+        })?,
+    )?;
+    hw.set("json", json)?;
     hw.set("config", lua.create_function(hw_config)?)?;
     hw.set(
         "layer_rule",

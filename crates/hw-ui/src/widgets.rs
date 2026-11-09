@@ -552,6 +552,11 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
                 e.set_text(&t);
             }
         }
+        // Cursor position; -1 = end of text.
+        (Kind::Entry, "position" | "cursor_position") => w
+            .downcast_ref::<gtk4::Entry>()
+            .unwrap()
+            .set_position(int()?),
         (Kind::Entry, "placeholder" | "placeholder_text") => w
             .downcast_ref::<gtk4::Entry>()
             .unwrap()
