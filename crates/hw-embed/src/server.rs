@@ -55,10 +55,11 @@ use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler, XdgDecorati
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
 };
+use smithay::wayland::viewporter::ViewporterState;
 use smithay::wayland::shm::{ShmHandler, ShmState, with_buffer_contents};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_drm_syncobj, delegate_output, delegate_seat,
-    delegate_shm, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_shm, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use crate::view::EmbedView;
@@ -128,6 +129,7 @@ impl EmbedServer {
                 toplevel: None,
                 frame_callbacks: Vec::new(),
                 texture: None,
+                stats: Stats::default(),
             },
         );
         view.attach(self.clone(), id);
@@ -356,6 +358,43 @@ struct ViewSlot {
     toplevel: Option<ToplevelSurface>,
     frame_callbacks: Vec<WlCallback>,
     texture: Option<gdk::Texture>,
+    stats: Stats,
+}
+
+/// Per-view commit counter, logged every few seconds (spike diagnostics).
+struct Stats {
+    commits: u32,
+    since: std::time::Instant,
+    last: String,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            commits: 0,
+            since: std::time::Instant::now(),
+            last: String::new(),
+        }
+    }
+}
+
+impl Stats {
+    fn record(&mut self, id: ViewId, kind: String) {
+        if kind != self.last {
+            tracing::info!(view = id, buffer = %kind, "buffer kind");
+            self.last = kind;
+        }
+        self.commits += 1;
+        let elapsed = self.since.elapsed();
+        if elapsed.as_secs() >= 3 {
+            let fps = f64::from(self.commits) / elapsed.as_secs_f64();
+            tracing::info!(view = id, fps = format_args!("{fps:.1}"), buffer = %self.last, "commits");
+            *self = Self {
+                last: std::mem::take(&mut self.last),
+                ..Self::default()
+            };
+        }
+    }
 }
 
 pub(crate) struct State {
@@ -364,6 +403,7 @@ pub(crate) struct State {
     xdg_shell: XdgShellState,
     _xdg_decoration: XdgDecorationState,
     shm: ShmState,
+    _viewporter: ViewporterState,
     data_device: DataDeviceState,
     seat_state: SeatState<State>,
     _seat: Seat<State>,
@@ -384,6 +424,9 @@ impl State {
         let xdg_shell = XdgShellState::new::<Self>(&dh);
         let xdg_decoration = XdgDecorationState::new::<Self>(&dh);
         let shm = ShmState::new::<Self>(&dh, []);
+        // mpv requires it. The picture is scaled to the widget anyway, so the
+        // destination size needs no extra handling for the root surface.
+        let viewporter = ViewporterState::new::<Self>(&dh);
         // Clipboard is M5; the global exists because foot refuses to start without it.
         let data_device = DataDeviceState::new::<Self>(&dh);
 
@@ -435,7 +478,9 @@ impl State {
                     .open(&node)?
                     .into();
                 let drm = DrmDeviceFd::new(DeviceFd::from(fd));
-                if supports_syncobj_eventfd(&drm) {
+                if std::env::var_os("HW_EMBED_NO_SYNCOBJ").is_some() {
+                    tracing::warn!("HW_EMBED_NO_SYNCOBJ set; linux-drm-syncobj disabled");
+                } else if supports_syncobj_eventfd(&drm) {
                     syncobj = Some(DrmSyncobjState::new::<Self>(&dh, drm));
                 } else {
                     tracing::warn!("DRM device lacks syncobj eventfd; linux-drm-syncobj disabled");
@@ -450,6 +495,7 @@ impl State {
             xdg_shell,
             _xdg_decoration: xdg_decoration,
             shm,
+            _viewporter: viewporter,
             data_device,
             seat_state,
             _seat: seat,
@@ -506,6 +552,18 @@ impl State {
             Some(BufferAssignment::NewBuffer(buffer)) => {
                 if let Ok(dmabuf) = get_dmabuf(&buffer) {
                     let dmabuf = dmabuf.clone();
+                    let format = dmabuf.format();
+                    slot.stats.record(
+                        id,
+                        format!(
+                            "dmabuf {:?} mod={:#x} {}x{} syncobj={}",
+                            format.code,
+                            u64::from(format.modifier),
+                            dmabuf.width(),
+                            dmabuf.height(),
+                            acquire.is_some()
+                        ),
+                    );
                     match dmabuf_texture(&display, &dmabuf, buffer, release) {
                         Ok(texture) => match acquire {
                             Some(point) => wait_acquire(&view, point, texture),
@@ -515,6 +573,7 @@ impl State {
                     }
                     slot.texture = None;
                 } else {
+                    slot.stats.record(id, "shm".into());
                     match shm_texture(&buffer, &damage, slot.texture.as_ref()) {
                         Ok(texture) => {
                             view.set_texture(Some(&texture));
@@ -854,4 +913,5 @@ delegate_xdg_shell!(State);
 delegate_xdg_decoration!(State);
 delegate_seat!(State);
 delegate_output!(State);
+delegate_viewporter!(State);
 delegate_data_device!(State);

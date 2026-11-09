@@ -1,7 +1,8 @@
 //! Dev harness for the M0.5 spike: a layer-shell window with one `EmbedView`.
 //!
 //! `cargo run -p hw-embed --example embed-test -- foot`
-//! Size with `HW_EMBED_SIZE=WxH` (default 900x600).
+//! Size with `HW_EMBED_SIZE=WxH` (default 900x600). `kill -USR1` toggles the
+//! view's visibility (frame callbacks must stop while it is hidden).
 
 use gtk4::{glib, prelude::*};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
@@ -66,6 +67,20 @@ fn main() -> glib::ExitCode {
         frame.append(&view);
         window.set_child(Some(&frame));
 
+        glib_unix::unix_signal_add_local(
+            libc::SIGUSR1,
+            glib::clone!(
+                #[weak]
+                view,
+                #[upgrade_or]
+                glib::ControlFlow::Break,
+                move || {
+                    view.set_visible(!view.is_visible());
+                    tracing::info!(visible = view.is_visible(), "toggled view");
+                    glib::ControlFlow::Continue
+                }
+            ),
+        );
         if let Err(e) = server.spawn(&view, &argv) {
             eprintln!("embed-test: spawn: {e:#}");
         }
