@@ -15,6 +15,7 @@
 //! SCSS: `$md-primary`, `$md-on-primary`, … (`_` → `-`), `$md-source`,
 //! `$md-dominant`, `$md-mode`, and the same as `--md-*` on `:root`.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -27,6 +28,7 @@ use material_colors::score::Score;
 use material_colors::theme::ThemeBuilder;
 use serde_json::{Map, Value, json};
 
+use crate::num::{f64_to_u8, usize_to_f64};
 use crate::service::{Pusher, Service, arg_str, cache_dir};
 
 pub const PROPS: &[&str] = &[
@@ -91,7 +93,7 @@ pub fn start() -> Result<Rc<Service>> {
     }));
     let svc = Rc::new_cyclic(|weak: &std::rc::Weak<Service>| {
         let mut svc = Service::new("theme", PROPS);
-        let (st, w) = (state.clone(), weak.clone());
+        let (st, w) = (Arc::clone(&state), std::rc::Weak::clone(weak));
         svc.method("set_wallpaper", move |args| {
             let path = arg_str(&args, 0, "path")?;
             let mode = mode_arg(&args, 1)?;
@@ -99,13 +101,13 @@ pub fn start() -> Result<Rc<Service>> {
                 return Ok(Value::Null);
             };
             svc.set("busy", json!(true));
-            let (st, pusher) = (st.clone(), svc.pusher());
+            let (st, pusher) = (Arc::clone(&st), svc.pusher());
             std::thread::Builder::new()
                 .name("hw-theme".into())
                 .spawn(move || {
                     let res = from_image(Path::new(&path));
                     let s = {
-                        let Ok(mut s) = st.lock() else { return };
+                        let mut s = st.lock().expect("theme state lock poisoned");
                         match res {
                             Ok(img) => {
                                 s.image = img;
@@ -123,17 +125,17 @@ pub fn start() -> Result<Rc<Service>> {
                 })?;
             Ok(Value::Null)
         });
-        let (st, w) = (state.clone(), weak.clone());
+        let (st, w) = (Arc::clone(&state), std::rc::Weak::clone(weak));
         svc.method("set_mode", move |args| {
             let mode = mode_arg(&args, 0)?.unwrap_or_else(|| "auto".into());
-            update(&st, &w, |s| s.mode = mode)
+            Ok(update(&st, &w, |s| s.mode = mode))
         });
-        let (st, w) = (state.clone(), weak.clone());
+        let (st, w) = (Arc::clone(&state), std::rc::Weak::clone(weak));
         svc.method("set_source", move |args| {
             let hex = arg_str(&args, 0, "color")?;
             let c = parse_hex(&hex).with_context(|| format!("invalid color {hex:?}"))?;
             let mode = mode_arg(&args, 1)?;
-            update(&st, &w, |s| {
+            Ok(update(&st, &w, |s| {
                 s.image = ImageColors {
                     source: c,
                     dominant: c,
@@ -143,7 +145,7 @@ pub fn start() -> Result<Rc<Service>> {
                 if let Some(m) = mode {
                     s.mode = m;
                 }
-            })
+            }))
         });
         svc.method("from_image", |args| {
             let img = from_image(Path::new(&arg_str(&args, 0, "path")?))?;
@@ -157,10 +159,7 @@ pub fn start() -> Result<Rc<Service>> {
         svc
     });
     svc.set("busy", json!(false));
-    let s = state
-        .lock()
-        .map_err(|_| anyhow::anyhow!("poisoned"))?
-        .clone();
+    let s = state.lock().expect("theme state lock poisoned").clone();
     for (p, v) in props(&s) {
         svc.set(p, v);
     }
@@ -177,13 +176,9 @@ fn mode_arg(args: &[Value], i: usize) -> Result<Option<String>> {
     }
 }
 
-fn update(
-    st: &Arc<Mutex<State>>,
-    w: &std::rc::Weak<Service>,
-    f: impl FnOnce(&mut State),
-) -> Result<Value> {
+fn update(st: &Arc<Mutex<State>>, w: &std::rc::Weak<Service>, f: impl FnOnce(&mut State)) -> Value {
     let s = {
-        let mut s = st.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
+        let mut s = st.lock().expect("theme state lock poisoned");
         f(&mut s);
         s.clone()
     };
@@ -192,7 +187,7 @@ fn update(
             svc.set(p, v);
         }
     }
-    Ok(Value::Null)
+    Value::Null
 }
 
 fn push(pusher: &Pusher, s: &State) {
@@ -207,7 +202,12 @@ fn props(s: &State) -> Vec<(&'static str, Value)> {
         "light" => "light",
         _ => "dark",
     };
-    let colors = palette(s.image.source, mode == "dark");
+    let scheme = if mode == "dark" {
+        Scheme::Dark
+    } else {
+        Scheme::Light
+    };
+    let colors = palette(s.image.source, scheme);
     vec![
         ("scss", json!(to_scss(&colors, &s.image, mode))),
         ("colors", Value::Object(colors)),
@@ -218,13 +218,19 @@ fn props(s: &State) -> Vec<(&'static str, Value)> {
     ]
 }
 
+/// Light or dark variant of a Material scheme.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scheme {
+    Light,
+    Dark,
+}
+
 /// Every Material role of the scheme as `"#rrggbb"`.
-pub fn palette(source: Argb, dark: bool) -> Map<String, Value> {
+pub fn palette(source: Argb, scheme: Scheme) -> Map<String, Value> {
     let theme = ThemeBuilder::with_source(source).build();
-    let scheme = if dark {
-        theme.schemes.dark
-    } else {
-        theme.schemes.light
+    let scheme = match scheme {
+        Scheme::Dark => theme.schemes.dark,
+        Scheme::Light => theme.schemes.light,
     };
     scheme
         .into_iter()
@@ -247,13 +253,13 @@ pub fn to_scss(colors: &Map<String, Value>, img: &ImageColors, mode: &str) -> St
     let mut s = String::from(
         "// Generated by hyprwidget from the wallpaper (material-colors). Do not edit.\n",
     );
-    s.push_str(&format!("$md-mode: {mode};\n"));
+    let _ = writeln!(s, "$md-mode: {mode};");
     for (k, v) in &vars {
-        s.push_str(&format!("${k}: {v};\n"));
+        let _ = writeln!(s, "${k}: {v};");
     }
     s.push_str(":root {\n");
     for (k, v) in &vars {
-        s.push_str(&format!("  --{k}: {v};\n"));
+        let _ = writeln!(s, "  --{k}: {v};");
     }
     s.push_str("}\n");
     s
@@ -264,8 +270,8 @@ fn parse_hex(s: &str) -> Option<Argb> {
     if h.len() != 6 {
         return None;
     }
-    let n = u32::from_str_radix(h, 16).ok()?;
-    Some(Argb::new(255, (n >> 16) as u8, (n >> 8) as u8, n as u8))
+    let [_, red, green, blue] = u32::from_str_radix(h, 16).ok()?.to_be_bytes();
+    Some(Argb::new(255, red, green, blue))
 }
 
 fn luma(c: Argb) -> f64 {
@@ -300,9 +306,10 @@ pub fn from_pixels(px: &[Argb]) -> ImageColors {
             brightness: 0.0,
         };
     }
-    let n = px.len() as f64;
-    let avg =
-        |f: fn(&Argb) -> u8| (px.iter().map(|p| f64::from(f(p))).sum::<f64>() / n).round() as u8;
+    let n = usize_to_f64(px.len());
+    let avg = |f: fn(&Argb) -> u8| {
+        f64_to_u8((px.iter().map(|p| f64::from(f(p))).sum::<f64>() / n).round())
+    };
     let dominant = Argb::new(255, avg(|p| p.red), avg(|p| p.green), avg(|p| p.blue));
     let q = QuantizerCelebi::quantize(px, 128);
     let source = Score::score(&q.color_to_count, None, None, None)
@@ -318,16 +325,17 @@ pub fn from_pixels(px: &[Argb]) -> ImageColors {
 
 fn pixels(pb: &gdk_pixbuf::Pixbuf) -> Vec<Argb> {
     let bytes = pb.read_pixel_bytes();
-    let (w, h) = (pb.width() as usize, pb.height() as usize);
-    let (stride, n) = (pb.rowstride() as usize, pb.n_channels() as usize);
-    let mut out = Vec::with_capacity(w * h);
-    for y in 0..h {
-        for x in 0..w {
-            let i = y * stride + x * n;
-            let Some(p) = bytes.get(i..i + n.min(4)) else {
+    let dim = |v: i32| usize::try_from(v).unwrap_or(0);
+    let (width, height) = (dim(pb.width()), dim(pb.height()));
+    let (stride, channels) = (dim(pb.rowstride()), dim(pb.n_channels()));
+    let mut out = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * stride + x * channels;
+            let Some(p) = bytes.get(i..i + channels.min(4)) else {
                 continue;
             };
-            if n == 4 && p[3] < 255 {
+            if channels == 4 && p[3] < 255 {
                 continue;
             }
             out.push(Argb::new(255, p[0], p[1], p[2]));
@@ -360,10 +368,13 @@ mod tests {
 
     #[test]
     fn palette_has_material_roles() {
-        let c = palette(DEFAULT_SOURCE, true);
+        let c = palette(DEFAULT_SOURCE, Scheme::Dark);
         assert!(c.len() >= 40, "{}", c.len());
         assert!(c["primary"].as_str().unwrap().starts_with('#'));
-        assert_ne!(c["surface"], palette(DEFAULT_SOURCE, false)["surface"]);
+        assert_ne!(
+            c["surface"],
+            palette(DEFAULT_SOURCE, Scheme::Light)["surface"]
+        );
     }
 
     #[test]
@@ -382,7 +393,7 @@ mod tests {
     #[test]
     fn scss_vars() {
         let img = from_pixels(&[]);
-        let colors = palette(img.source, true);
+        let colors = palette(img.source, Scheme::Dark);
         let s = to_scss(&colors, &img, "dark");
         assert!(s.contains("$md-mode: dark;"));
         assert!(s.contains("$md-on-primary: #"));

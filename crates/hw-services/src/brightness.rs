@@ -57,11 +57,11 @@ pub fn start() -> Result<Rc<Service>> {
     let displays: Shared = Arc::new(Mutex::new(Vec::new()));
     let svc = Rc::new_cyclic(|weak: &std::rc::Weak<Service>| {
         let mut svc = Service::new("brightness", PROPS);
-        let (d, w) = (displays.clone(), weak.clone());
+        let (d, w) = (Arc::clone(&displays), std::rc::Weak::clone(weak));
         svc.method("set", move |args| {
             let v = arg_f64(&args, 0, "brightness")?.clamp(0.0, 1.0);
             let only = arg_str(&args, 1, "display").ok();
-            let mut list = d.lock().map_err(|_| anyhow::anyhow!("poisoned"))?;
+            let mut list = d.lock().expect("brightness displays lock poisoned");
             let mut hit = false;
             for disp in list
                 .iter_mut()
@@ -85,7 +85,7 @@ pub fn start() -> Result<Rc<Service>> {
     let pusher = svc.pusher();
     std::thread::Builder::new()
         .name("hw-brightness".into())
-        .spawn(move || worker(displays, pusher))?;
+        .spawn(move || worker(&displays, &pusher))?;
     Ok(svc)
 }
 
@@ -95,8 +95,7 @@ fn props(list: &[Display]) -> Vec<(&'static str, Value)> {
         (
             "brightness",
             list.first()
-                .map(|d| d.json()["brightness"].clone())
-                .unwrap_or(Value::Null),
+                .map_or(Value::Null, |d| d.json()["brightness"].clone()),
         ),
         (
             "displays",
@@ -105,7 +104,7 @@ fn props(list: &[Display]) -> Vec<(&'static str, Value)> {
     ]
 }
 
-fn worker(shared: Shared, pusher: Pusher) {
+fn worker(shared: &Shared, pusher: &Pusher) {
     let has_ddc = which("ddcutil");
     let mut tick = 0u32;
     loop {
@@ -113,12 +112,12 @@ fn worker(shared: Shared, pusher: Pusher) {
         tick = tick.wrapping_add(1);
         let mut list = read_backlights(Path::new(BACKLIGHT));
         {
-            let Ok(mut s) = shared.lock() else { return };
+            let mut s = shared.lock().expect("brightness displays lock poisoned");
             // Between DDC reads, keep the last known (or last set) values.
             let ddc = fresh_ddc
                 .unwrap_or_else(|| s.iter().filter(|d| d.kind == "ddc").cloned().collect());
             list.extend(ddc);
-            *s = list.clone();
+            s.clone_from(&list);
         }
         for (p, v) in props(&list) {
             if !pusher.set(p, v) {
@@ -131,8 +130,7 @@ fn worker(shared: Shared, pusher: Pusher) {
 
 fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
-        .unwrap_or(false)
+        .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(bin).is_file()))
 }
 
 fn read_backlights(root: &Path) -> Vec<Display> {
@@ -230,18 +228,15 @@ fn parse_vcp(s: &str) -> Option<(f64, f64)> {
 
 fn set_display(d: &mut Display, v: f64) -> Result<()> {
     let raw = (v * d.max).round();
-    match d.kind {
-        "backlight" => {
-            let dev = d.id.trim_start_matches("backlight:").to_owned();
-            spawn_detached("brightnessctl", &["-d", &dev, "set", &format!("{raw}")])?;
-        }
-        _ => {
-            let n = d.id.trim_start_matches("ddc:").to_owned();
-            spawn_detached(
-                "ddcutil",
-                &["--display", &n, "setvcp", "10", &format!("{raw}")],
-            )?;
-        }
+    if d.kind == "backlight" {
+        let dev = d.id.trim_start_matches("backlight:").to_owned();
+        spawn_detached("brightnessctl", &["-d", &dev, "set", &format!("{raw}")])?;
+    } else {
+        let n = d.id.trim_start_matches("ddc:").to_owned();
+        spawn_detached(
+            "ddcutil",
+            &["--display", &n, "setvcp", "10", &format!("{raw}")],
+        )?;
     }
     d.value = raw;
     Ok(())

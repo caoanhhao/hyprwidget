@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use crate::num::{f64_to_u64, u64_to_f64, usize_to_f64};
 use crate::service::{Pusher, Service, arg_f64, cache_dir};
 
 pub const PROPS: &[&str] = &[
@@ -37,11 +38,11 @@ pub fn start() -> Result<Rc<Service>> {
     let interval = Arc::new(AtomicU64::new(DEFAULT_INTERVAL_MS));
     let mut svc = Service::new("sysinfo", PROPS);
     svc.set("interval", json!(DEFAULT_INTERVAL_MS));
-    let iv = interval.clone();
+    let iv = Arc::clone(&interval);
     let svc = Rc::new_cyclic(|weak: &std::rc::Weak<Service>| {
-        let weak = weak.clone();
+        let weak = std::rc::Weak::clone(weak);
         svc.method("set_interval", move |args| {
-            let ms = arg_f64(&args, 0, "milliseconds")?.max(250.0) as u64;
+            let ms = f64_to_u64(arg_f64(&args, 0, "milliseconds")?.max(250.0));
             iv.store(ms, Ordering::Relaxed);
             if let Some(s) = weak.upgrade() {
                 s.set("interval", json!(ms));
@@ -53,11 +54,11 @@ pub fn start() -> Result<Rc<Service>> {
     let pusher = svc.pusher();
     std::thread::Builder::new()
         .name("hw-sysinfo".into())
-        .spawn(move || worker(interval, pusher))?;
+        .spawn(move || worker(&interval, &pusher))?;
     Ok(svc)
 }
 
-fn worker(interval: Arc<AtomicU64>, pusher: Pusher) {
+fn worker(interval: &AtomicU64, pusher: &Pusher) {
     let mut s = Sampler::new();
     // First CPU delta needs two samples.
     std::thread::sleep(Duration::from_millis(500));
@@ -116,9 +117,9 @@ impl Sampler {
         out.push((
             "cpu",
             json!({
-                "usage": usage.first().map(|u| round1(*u)).unwrap_or(0.0),
+                "usage": usage.first().map_or(0.0, |u| round1(*u)),
                 "cores": usage.iter().skip(1).map(|u| round1(*u)).collect::<Vec<_>>(),
-                "clock_ghz": read("/proc/cpuinfo").map(|s| cpu_clock_ghz(&s)).unwrap_or(0.0),
+                "clock_ghz": read("/proc/cpuinfo").map_or(0.0, |s| cpu_clock_ghz(&s)),
                 "threads": usage.len().saturating_sub(1),
                 "temp": temp,
             }),
@@ -141,8 +142,8 @@ impl Sampler {
                 .filter_map(|c| {
                     Some(json!({
                         "label": c.label(),
-                        "temp": round1(c.temperature()? as f64),
-                        "critical": c.critical().map(|t| round1(t as f64)),
+                        "temp": round1(f64::from(c.temperature()?)),
+                        "critical": c.critical().map(|t| round1(f64::from(t))),
                     }))
                 })
                 .collect();
@@ -192,7 +193,7 @@ impl CpuTimes {
         if dt == 0 {
             return 0.0;
         }
-        100.0 * (1.0 - di as f64 / dt as f64)
+        100.0 * (1.0 - u64_to_f64(di) / u64_to_f64(dt))
     }
 }
 
@@ -227,7 +228,7 @@ fn cpu_clock_ghz(cpuinfo: &str) -> f64 {
     if mhz.is_empty() {
         return 0.0;
     }
-    (mhz.iter().sum::<f64>() / mhz.len() as f64 / 10.0).round() / 100.0
+    (mhz.iter().sum::<f64>() / usize_to_f64(mhz.len()) / 10.0).round() / 100.0
 }
 
 /// hwmon `k10temp`/`coretemp`/`cpu_thermal`, else a CPU thermal zone.
@@ -236,7 +237,7 @@ fn find_cpu_temp() -> Option<PathBuf> {
         .ok()?
         .flatten()
         .collect();
-    hwmons.sort_by_key(|e| e.file_name());
+    hwmons.sort_by_key(std::fs::DirEntry::file_name);
     for e in hwmons {
         let name = read(e.path().join("name")).unwrap_or_default();
         if ["k10temp", "coretemp", "cpu_thermal", "zenpower"]
@@ -283,7 +284,7 @@ fn memory_json(m: &HashMap<String, u64>) -> Value {
         if total == 0 {
             0.0
         } else {
-            round1(100.0 * used as f64 / total as f64)
+            round1(100.0 * u64_to_f64(used) / u64_to_f64(total))
         }
     };
     json!({
@@ -368,7 +369,7 @@ impl Gpu {
 fn parse_nvidia_smi(out: &str) -> Option<Value> {
     let f: Vec<&str> = out.lines().next()?.split(',').map(str::trim).collect();
     let num = |i: usize| f.get(i).and_then(|v| v.parse::<f64>().ok());
-    let mib = |i: usize| num(i).map(|m| (m * 1024.0 * 1024.0) as u64);
+    let mib = |i: usize| num(i).map(|m| f64_to_u64(m * 1024.0 * 1024.0));
     Some(json!({
         "label": f.first()?,
         "load": num(1),
@@ -386,7 +387,7 @@ fn disks() -> Value {
         return Value::Array(Vec::new());
     };
     let mut seen: HashMap<String, Value> = HashMap::new();
-    for d in disks.iter() {
+    for d in &disks {
         let dev = d.name().to_string_lossy().into_owned();
         let mount = d.mount_point().to_string_lossy().into_owned();
         if !dev.starts_with("/dev/") {
@@ -407,7 +408,7 @@ fn disks() -> Value {
                     "available": avail,
                     "used": total.saturating_sub(avail),
                     "usage": if total == 0 { 0.0 } else {
-                        round1(100.0 * total.saturating_sub(avail) as f64 / total as f64)
+                        round1(100.0 * u64_to_f64(total.saturating_sub(avail)) / u64_to_f64(total))
                     },
                     "removable": d.is_removable(),
                 }),
@@ -504,8 +505,8 @@ impl Net {
         if let Some((prx, ptx, t)) = self.prev {
             let dt = now.duration_since(t).as_secs_f64().max(0.001);
             let (drx, dtx) = (rx.saturating_sub(prx), tx.saturating_sub(ptx));
-            rx_speed = (drx as f64 / dt).round();
-            tx_speed = (dtx as f64 / dt).round();
+            rx_speed = (u64_to_f64(drx) / dt).round();
+            tx_speed = (u64_to_f64(dtx) / dt).round();
             self.today.0 += drx;
             self.today.1 += dtx;
         }
@@ -559,7 +560,9 @@ fn update_log(old: &str, date: &str, tx: u64, rx: u64) -> String {
         .map(str::to_owned)
         .collect();
     out.push(format!("{date} {tx} {rx}"));
-    out.join("\n") + "\n"
+    let mut log = out.join("\n");
+    log.push('\n');
+    log
 }
 
 #[cfg(test)]
@@ -589,7 +592,7 @@ mod tests {
         let m =
             parse_meminfo("MemTotal:       1000 kB\nMemAvailable:    250 kB\nSwapTotal: 0 kB\n");
         let j = memory_json(&m);
-        assert_eq!(j["total"], json!(1024000));
+        assert_eq!(j["total"], json!(1_024_000));
         assert_eq!(j["used"], json!(750 * 1024));
         assert_eq!(j["usage"], json!(75.0));
         assert_eq!(j["swap_usage"], json!(0.0));
@@ -619,7 +622,7 @@ mod tests {
         let v = parse_nvidia_smi("NVIDIA GeForce RTX 4070, 3, 1445, 12282, 40\n").unwrap();
         assert_eq!(v["label"], json!("NVIDIA GeForce RTX 4070"));
         assert_eq!(v["load"], json!(3.0));
-        assert_eq!(v["memory_used"], json!(1445u64 * 1048576));
+        assert_eq!(v["memory_used"], json!(1445u64 * 1_048_576));
         assert_eq!(v["temp"], json!(40.0));
         assert_eq!(parse_nvidia_smi(""), None);
     }

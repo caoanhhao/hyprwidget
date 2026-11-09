@@ -57,6 +57,10 @@ pub enum ImageHint {
 
 /// The hints we understand. Unknown hints are dropped.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "one field per boolean hint of the notification spec"
+)]
 pub struct Hints {
     pub urgency: Urgency,
     pub category: Option<String>,
@@ -74,7 +78,7 @@ pub struct Hints {
     pub value: Option<i32>,
 }
 
-pub fn parse_image_data(v: &Value) -> Option<RawImage> {
+pub fn parse_image_data(v: &Value<'_>) -> Option<RawImage> {
     let Value::Structure(s) = unwrap_variant(v) else {
         return None;
     };
@@ -103,7 +107,7 @@ pub fn uri_to_path(s: &str) -> String {
     s.to_owned()
 }
 
-pub fn parse_hints(hints: &HashMap<String, OwnedValue>) -> Hints {
+pub fn parse_hints<S: std::hash::BuildHasher>(hints: &HashMap<String, OwnedValue, S>) -> Hints {
     let get = |k: &str| hints.get(k).map(|v| &**v);
     let str_hint = |k: &str| get(k).and_then(v_str).filter(|s| !s.is_empty());
     let bool_hint = |k: &str| get(k).and_then(v_bool).unwrap_or(false);
@@ -164,12 +168,13 @@ mod tests {
     use super::*;
     use zbus::zvariant::{Structure, StructureBuilder};
 
-    fn ov(v: Value<'_>) -> OwnedValue {
+    fn ov(v: &Value<'_>) -> OwnedValue {
         v.try_to_owned().unwrap()
     }
 
-    fn image(w: i32, h: i32, alpha: bool) -> Structure<'static> {
-        let ch = if alpha { 4 } else { 3 };
+    /// `ch` is 3 (RGB) or 4 (RGBA).
+    fn image(w: i32, h: i32, ch: i32) -> Structure<'static> {
+        let alpha = ch == 4;
         StructureBuilder::new()
             .add_field(w)
             .add_field(h)
@@ -177,7 +182,7 @@ mod tests {
             .add_field(alpha)
             .add_field(8i32)
             .add_field(ch)
-            .add_field(vec![7u8; (w * h * ch) as usize])
+            .add_field(vec![7u8; usize::try_from(w * h * ch).unwrap()])
             .build()
             .unwrap()
     }
@@ -185,22 +190,22 @@ mod tests {
     #[test]
     fn basic_hints() {
         let mut m = HashMap::new();
-        m.insert("urgency".into(), ov(Value::U8(2)));
-        m.insert("category".into(), ov(Value::from("im.received")));
+        m.insert("urgency".into(), ov(&Value::U8(2)));
+        m.insert("category".into(), ov(&Value::from("im.received")));
         m.insert(
             "desktop-entry".into(),
-            ov(Value::from("org.telegram.desktop")),
+            ov(&Value::from("org.telegram.desktop")),
         );
-        m.insert("resident".into(), ov(Value::Bool(true)));
-        m.insert("transient".into(), ov(Value::Bool(false)));
+        m.insert("resident".into(), ov(&Value::Bool(true)));
+        m.insert("transient".into(), ov(&Value::Bool(false)));
         m.insert(
             "sound-file".into(),
-            ov(Value::from("file:///tmp/a%20b.oga")),
+            ov(&Value::from("file:///tmp/a%20b.oga")),
         );
-        m.insert("suppress-sound".into(), ov(Value::Bool(true)));
-        m.insert("x".into(), ov(Value::I32(10)));
-        m.insert("value".into(), ov(Value::I32(42)));
-        m.insert("unknown".into(), ov(Value::from("ignored")));
+        m.insert("suppress-sound".into(), ov(&Value::Bool(true)));
+        m.insert("x".into(), ov(&Value::I32(10)));
+        m.insert("value".into(), ov(&Value::I32(42)));
+        m.insert("unknown".into(), ov(&Value::from("ignored")));
         let h = parse_hints(&m);
         assert_eq!(h.urgency, Urgency::Critical);
         assert_eq!(h.category.as_deref(), Some("im.received"));
@@ -217,8 +222,8 @@ mod tests {
         assert_eq!(h, Hints::default());
         // Some senders wrap values in an extra variant or use other int types.
         let mut m = HashMap::new();
-        m.insert("urgency".into(), ov(Value::Value(Box::new(Value::I32(0)))));
-        m.insert("resident".into(), ov(Value::U32(1)));
+        m.insert("urgency".into(), ov(&Value::Value(Box::new(Value::I32(0)))));
+        m.insert("resident".into(), ov(&Value::U32(1)));
         let h = parse_hints(&m);
         assert_eq!(h.urgency, Urgency::Low);
         assert!(h.resident);
@@ -227,8 +232,8 @@ mod tests {
     #[test]
     fn image_data_beats_image_path() {
         let mut m = HashMap::new();
-        m.insert("image-path".into(), ov(Value::from("/tmp/x.png")));
-        m.insert("image-data".into(), ov(Value::Structure(image(2, 3, true))));
+        m.insert("image-path".into(), ov(&Value::from("/tmp/x.png")));
+        m.insert("image-data".into(), ov(&Value::Structure(image(2, 3, 4))));
         let h = parse_hints(&m);
         let Some(ImageHint::Data(img)) = h.image else {
             panic!("expected image data, got {:?}", h.image);
@@ -243,26 +248,26 @@ mod tests {
         let mut m = HashMap::new();
         m.insert(
             "image_path".into(),
-            ov(Value::from("file:///home/u/pic.png")),
+            ov(&Value::from("file:///home/u/pic.png")),
         );
         assert_eq!(
             parse_hints(&m).image,
             Some(ImageHint::Path("/home/u/pic.png".into()))
         );
         let mut m = HashMap::new();
-        m.insert("image-path".into(), ov(Value::from("dialog-information")));
+        m.insert("image-path".into(), ov(&Value::from("dialog-information")));
         assert_eq!(
             parse_hints(&m).image,
             Some(ImageHint::Path("dialog-information".into()))
         );
         let mut m = HashMap::new();
-        m.insert("icon_data".into(), ov(Value::Structure(image(1, 1, false))));
+        m.insert("icon_data".into(), ov(&Value::Structure(image(1, 1, 3))));
         assert!(matches!(parse_hints(&m).image, Some(ImageHint::Data(_))));
     }
 
     #[test]
     fn unsupported_image_data_falls_back() {
-        let mut bad = image(2, 2, true);
+        let mut bad = image(2, 2, 4);
         // 16-bit samples aren't defined by the spec.
         bad = {
             let mut f = bad.into_fields();
@@ -274,8 +279,8 @@ mod tests {
             b.build().unwrap()
         };
         let mut m = HashMap::new();
-        m.insert("image-data".into(), ov(Value::Structure(bad)));
-        m.insert("image-path".into(), ov(Value::from("/a.png")));
+        m.insert("image-data".into(), ov(&Value::Structure(bad)));
+        m.insert("image-path".into(), ov(&Value::from("/a.png")));
         assert_eq!(
             parse_hints(&m).image,
             Some(ImageHint::Path("/a.png".into()))
@@ -286,7 +291,7 @@ mod tests {
     fn actions_pairs() {
         let a: Vec<String> = ["default", "Open", "reply", "Reply", "dangling"]
             .iter()
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
         assert_eq!(
             parse_actions(&a),
@@ -311,7 +316,7 @@ mod tests {
             .unwrap();
         assert_eq!(parse_image_data(&Value::Structure(s)), None);
         let mut m = HashMap::new();
-        m.insert("x".into(), ov(Value::I64(1 << 32)));
+        m.insert("x".into(), ov(&Value::I64(1 << 32)));
         assert_eq!(parse_hints(&m).x, None);
     }
 }

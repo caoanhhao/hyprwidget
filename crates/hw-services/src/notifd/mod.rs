@@ -34,6 +34,10 @@ pub struct Action {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "spec hints persisted and serialized to Lua as flat booleans"
+)]
 pub struct Notification {
     pub id: u32,
     pub app_name: String,
@@ -78,6 +82,18 @@ pub enum CloseReason {
     Undefined = 4,
 }
 
+impl CloseReason {
+    /// The reason's number in the `NotificationClosed` signal.
+    pub fn code(self) -> u32 {
+        match self {
+            Self::Expired => 1,
+            Self::Dismissed => 2,
+            Self::Closed => 3,
+            Self::Undefined => 4,
+        }
+    }
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Saved {
     #[serde(default)]
@@ -113,6 +129,17 @@ pub struct Notifd {
     next_id: Arc<AtomicU32>,
 }
 
+impl std::fmt::Debug for Notifd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Notifd")
+            .field("ignore_timeout", &self.ignore_timeout)
+            .field("history_file", &self.history_file)
+            .field("images_dir", &self.images_dir)
+            .field("next_id", &self.next_id)
+            .finish_non_exhaustive()
+    }
+}
+
 thread_local! {
     static INSTANCE: OnceCell<Rc<Notifd>> = const { OnceCell::new() };
 }
@@ -120,13 +147,12 @@ thread_local! {
 /// The daemon, started on first use (main thread only).
 pub fn get() -> Rc<Notifd> {
     INSTANCE.with(|i| {
-        i.get_or_init(|| {
+        Rc::clone(i.get_or_init(|| {
             let n = Notifd::load();
             let weak = Rc::downgrade(&n);
             dbus::spawn("notifd", async move { Notifd::serve(weak).await });
             n
-        })
-        .clone()
+        }))
     })
 }
 
@@ -175,7 +201,7 @@ impl Notifd {
                 PATH,
                 Server {
                     tx,
-                    next_id: this.next_id.clone(),
+                    next_id: Arc::clone(&this.next_id),
                 },
             )
             .await?;
@@ -209,7 +235,7 @@ impl Notifd {
             }
         }
 
-        let w = weak.clone();
+        let w = std::rc::Weak::clone(&weak);
         glib::spawn_future_local(async move {
             while let Some(sig) = acquired.next().await {
                 if let (Ok(a), Some(this)) = (sig.args(), w.upgrade())
@@ -220,7 +246,7 @@ impl Notifd {
                 }
             }
         });
-        let w = weak.clone();
+        let w = std::rc::Weak::clone(&weak);
         glib::spawn_future_local(async move {
             while let Some(sig) = lost.next().await {
                 if let (Ok(a), Some(this)) = (sig.args(), w.upgrade())
@@ -248,7 +274,11 @@ impl Notifd {
             Some(ImageHint::Data(img)) => dbus::save_png(
                 &self.images_dir,
                 img.data,
-                img.has_alpha,
+                if img.has_alpha {
+                    dbus::Channels::Rgba
+                } else {
+                    dbus::Channels::Rgb
+                },
                 img.width,
                 img.height,
                 img.rowstride,
@@ -306,13 +336,15 @@ impl Notifd {
         }
         if timeout > 0 && !critical && !self.ignore_timeout.get() {
             let weak = Rc::downgrade(self);
-            let src =
-                glib::timeout_add_local_once(Duration::from_millis(timeout as u64), move || {
+            let src = glib::timeout_add_local_once(
+                Duration::from_millis(u64::from(timeout.unsigned_abs())),
+                move || {
                     if let Some(this) = weak.upgrade() {
                         this.timers.borrow_mut().remove(&id);
                         this.close(id, CloseReason::Expired);
                     }
-                });
+                },
+            );
             self.timers.borrow_mut().insert(id, src);
         }
         self.notified.replace((id, replaced));
@@ -339,7 +371,7 @@ impl Notifd {
         self.cancel_timer(id);
         self.forget_image(n.image.as_deref());
         self.emit(
-            move |em| async move { Server::notification_closed(&em, id, reason as u32).await },
+            move |em| async move { Server::notification_closed(&em, id, reason.code()).await },
         );
         self.resolved.replace((id, reason));
         self.schedule_save();
@@ -380,6 +412,10 @@ impl Notifd {
         self.notifications.peek().into_iter().find(|n| n.id == id)
     }
 
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "public API called from hw-lua with a Lua boolean"
+    )]
     pub fn set_dnd(self: &Rc<Self>, on: bool) {
         self.dnd.set(on);
         self.schedule_save();

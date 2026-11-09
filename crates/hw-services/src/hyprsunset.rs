@@ -29,31 +29,31 @@ const POLL: Duration = Duration::from_secs(10);
 pub fn start() -> Result<Rc<Service>> {
     let svc = Rc::new_cyclic(|weak: &std::rc::Weak<Service>| {
         let mut svc = Service::new("hyprsunset", PROPS);
-        let w = weak.clone();
+        let w = std::rc::Weak::clone(weak);
         svc.method("set_temperature", move |args| {
             let k = arg_f64(&args, 0, "temperature")?
                 .clamp(1000.0, 20000.0)
                 .round();
             request(&format!("temperature {k}"))?;
-            set_identity(&w, false);
+            set_prop(&w, "identity", json!(false));
             refresh(&w);
             Ok(Value::Null)
         });
-        let w = weak.clone();
+        let w = std::rc::Weak::clone(weak);
         svc.method("set_gamma", move |args| {
             let g = arg_f64(&args, 0, "gamma")?.clamp(0.0, 200.0).round();
             request(&format!("gamma {g}"))?;
             refresh(&w);
             Ok(Value::Null)
         });
-        let w = weak.clone();
+        let w = std::rc::Weak::clone(weak);
         svc.method("set_identity", move |_| {
             request("identity")?;
-            set_identity(&w, true);
+            set_prop(&w, "identity", json!(true));
             refresh(&w);
             Ok(Value::Null)
         });
-        let w = weak.clone();
+        let w = std::rc::Weak::clone(weak);
         svc.method("refresh", move |_| {
             refresh(&w);
             Ok(Value::Null)
@@ -70,13 +70,13 @@ pub fn start() -> Result<Rc<Service>> {
     let pusher = svc.pusher();
     std::thread::Builder::new()
         .name("hw-hyprsunset".into())
-        .spawn(move || worker(pusher))?;
+        .spawn(move || worker(&pusher))?;
     Ok(svc)
 }
 
-fn set_identity(w: &std::rc::Weak<Service>, on: bool) {
+fn set_prop(w: &std::rc::Weak<Service>, prop: &str, v: Value) {
     if let Some(svc) = w.upgrade() {
-        svc.set("identity", json!(on));
+        svc.set(prop, v);
     }
 }
 
@@ -88,7 +88,7 @@ fn refresh(w: &std::rc::Weak<Service>) {
     }
 }
 
-fn worker(pusher: Pusher) {
+fn worker(pusher: &Pusher) {
     loop {
         std::thread::sleep(POLL);
         for (p, v) in read() {

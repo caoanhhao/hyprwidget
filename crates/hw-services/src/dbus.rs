@@ -102,7 +102,7 @@ pub fn unwrap_variant<'a, 'v>(v: &'a Value<'v>) -> &'a Value<'v> {
     }
 }
 
-pub fn v_str(v: &Value) -> Option<String> {
+pub fn v_str(v: &Value<'_>) -> Option<String> {
     match unwrap_variant(v) {
         Value::Str(s) => Some(s.to_string()),
         Value::ObjectPath(p) => Some(p.to_string()),
@@ -111,29 +111,29 @@ pub fn v_str(v: &Value) -> Option<String> {
     }
 }
 
-pub fn v_i64(v: &Value) -> Option<i64> {
+pub fn v_i64(v: &Value<'_>) -> Option<i64> {
     Some(match unwrap_variant(v) {
-        Value::U8(n) => *n as i64,
-        Value::Bool(b) => *b as i64,
-        Value::I16(n) => *n as i64,
-        Value::U16(n) => *n as i64,
-        Value::I32(n) => *n as i64,
-        Value::U32(n) => *n as i64,
+        Value::U8(n) => i64::from(*n),
+        Value::Bool(b) => i64::from(*b),
+        Value::I16(n) => i64::from(*n),
+        Value::U16(n) => i64::from(*n),
+        Value::I32(n) => i64::from(*n),
+        Value::U32(n) => i64::from(*n),
         Value::I64(n) => *n,
-        Value::U64(n) => *n as i64,
-        Value::F64(n) => *n as i64,
+        Value::U64(n) => i64::try_from(*n).ok()?,
+        Value::F64(n) => crate::num::f64_to_i64(*n),
         _ => return None,
     })
 }
 
-pub fn v_f64(v: &Value) -> Option<f64> {
+pub fn v_f64(v: &Value<'_>) -> Option<f64> {
     match unwrap_variant(v) {
         Value::F64(n) => Some(*n),
-        v => v_i64(v).map(|n| n as f64),
+        v => v_i64(v).map(crate::num::i64_to_f64),
     }
 }
 
-pub fn v_bool(v: &Value) -> Option<bool> {
+pub fn v_bool(v: &Value<'_>) -> Option<bool> {
     match unwrap_variant(v) {
         Value::Bool(b) => Some(*b),
         v => v_i64(v).map(|n| n != 0),
@@ -141,7 +141,7 @@ pub fn v_bool(v: &Value) -> Option<bool> {
 }
 
 /// Strings of an `as` (or a single `s`, as some players send for artists).
-pub fn v_strs(v: &Value) -> Vec<String> {
+pub fn v_strs(v: &Value<'_>) -> Vec<String> {
     match unwrap_variant(v) {
         Value::Array(a) => a.iter().filter_map(v_str).collect(),
         v => v_str(v).into_iter().collect(),
@@ -149,7 +149,7 @@ pub fn v_strs(v: &Value) -> Vec<String> {
 }
 
 /// Bytes of an `ay`.
-pub fn v_bytes(v: &Value) -> Option<Vec<u8>> {
+pub fn v_bytes(v: &Value<'_>) -> Option<Vec<u8>> {
     match unwrap_variant(v) {
         Value::Array(a) => a
             .iter()
@@ -162,12 +162,32 @@ pub fn v_bytes(v: &Value) -> Option<Vec<u8>> {
     }
 }
 
-/// Writes an RGBA buffer as PNG into `dir`, named by its content hash so
+/// Pixel layout of a raw 8-bit image buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Channels {
+    Rgb,
+    Rgba,
+}
+
+impl Channels {
+    pub fn has_alpha(self) -> bool {
+        self == Self::Rgba
+    }
+
+    fn count(self) -> usize {
+        match self {
+            Self::Rgb => 3,
+            Self::Rgba => 4,
+        }
+    }
+}
+
+/// Writes an RGB(A) buffer as PNG into `dir`, named by its content hash so
 /// identical images share one file. Returns the path.
 pub fn save_png(
     dir: &std::path::Path,
     rgba: Vec<u8>,
-    has_alpha: bool,
+    channels: Channels,
     width: i32,
     height: i32,
     rowstride: i32,
@@ -176,14 +196,17 @@ pub fn save_png(
     if width <= 0 || height <= 0 || rowstride <= 0 {
         return None;
     }
-    let channels = if has_alpha { 4 } else { 3 };
+    let has_alpha = channels.has_alpha();
     // Values come off the bus: reject rows narrower than a pixel row and
     // sizes that overflow instead of handing GdkPixbuf inconsistent geometry.
-    let row = (width as usize).checked_mul(channels)?;
-    let min_len = (rowstride as usize)
-        .checked_mul(height as usize - 1)?
-        .checked_add(row)?;
-    if (rowstride as usize) < row || rgba.len() < min_len {
+    let (cols, rows, stride) = (
+        usize::try_from(width).ok()?,
+        usize::try_from(height).ok()?,
+        usize::try_from(rowstride).ok()?,
+    );
+    let row = cols.checked_mul(channels.count())?;
+    let min_len = stride.checked_mul(rows - 1)?.checked_add(row)?;
+    if stride < row || rgba.len() < min_len {
         return None;
     }
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -249,7 +272,7 @@ pub async fn watch_props(
         if args.interface_name.as_str() != iface {
             continue;
         }
-        for (k, v) in args.changed_properties.iter() {
+        for (k, v) in &args.changed_properties {
             if let Ok(v) = v.try_to_owned() {
                 props.insert((*k).to_owned(), v);
             }
@@ -292,7 +315,7 @@ pub fn v_dict<'a, 'v>(v: &'a Value<'v>) -> std::collections::HashMap<String, &'a
             .iter()
             .filter_map(|(k, v)| Some((v_str(k)?, unwrap_variant(v))))
             .collect(),
-        _ => Default::default(),
+        _ => std::collections::HashMap::default(),
     }
 }
 
@@ -304,12 +327,15 @@ mod tests {
     fn save_png_rejects_bad_geometry() {
         let dir = std::env::temp_dir();
         // Rowstride narrower than a row of pixels.
-        assert_eq!(save_png(&dir, vec![0; 64], true, 4, 2, 1), None);
-        assert_eq!(save_png(&dir, vec![0; 64], false, 4, 2, 11), None);
+        assert_eq!(save_png(&dir, vec![0; 64], Channels::Rgba, 4, 2, 1), None);
+        assert_eq!(save_png(&dir, vec![0; 64], Channels::Rgb, 4, 2, 11), None);
         // Huge width with a tiny rowstride must not pass the length check.
-        assert_eq!(save_png(&dir, vec![0; 64], true, i32::MAX, 1, 1), None);
+        assert_eq!(
+            save_png(&dir, vec![0; 64], Channels::Rgba, i32::MAX, 1, 1),
+            None
+        );
         // Too short for the claimed size.
-        assert_eq!(save_png(&dir, vec![0; 31], true, 4, 2, 16), None);
-        assert_eq!(save_png(&dir, vec![0; 8], true, 0, 2, 16), None);
+        assert_eq!(save_png(&dir, vec![0; 31], Channels::Rgba, 4, 2, 16), None);
+        assert_eq!(save_png(&dir, vec![0; 8], Channels::Rgba, 0, 2, 16), None);
     }
 }

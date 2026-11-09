@@ -3,7 +3,7 @@
 //! (`hw.service.<name>:<method>(...)`).
 //!
 //! Services live on the GTK main thread. Worker threads push new values
-//! through a [`Pusher`], drained by the GLib main loop.
+//! through a [`Pusher`], drained by the `GLib` main loop.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -21,6 +21,16 @@ pub struct Service {
     props: Vec<(&'static str, Signal<Value>)>,
     methods: Vec<(&'static str, Method)>,
     keep: RefCell<Vec<Box<dyn Any>>>,
+}
+
+impl std::fmt::Debug for Service {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Service")
+            .field("name", &self.name)
+            .field("props", &self.prop_names().collect::<Vec<_>>())
+            .field("methods", &self.method_names().collect::<Vec<_>>())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Service {
@@ -78,7 +88,7 @@ impl Service {
     }
 
     /// Returns a `Send` handle that updates props from any thread. Must be
-    /// called on the main thread (needs its GLib main context).
+    /// called on the main thread (needs its `GLib` main context).
     pub fn pusher(&self) -> Pusher {
         let (tx, rx) = async_channel::unbounded::<Update>();
         let props: Vec<(&'static str, WeakSignal<Value>)> = self
@@ -118,13 +128,14 @@ impl Service {
     }
 }
 
+#[derive(Debug)]
 enum Update {
     Set(&'static str, Value),
     Emit(&'static str, Value),
 }
 
 /// Thread-safe prop updater created by [`Service::pusher`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Pusher(async_channel::Sender<Update>);
 
 impl Pusher {

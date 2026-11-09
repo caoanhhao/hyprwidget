@@ -7,6 +7,7 @@
 
 use std::rc::Rc;
 
+mod num;
 pub mod service;
 
 pub use service::Service;

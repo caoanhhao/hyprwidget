@@ -1,5 +1,5 @@
-//! System tray: StatusNotifierWatcher + StatusNotifierHost (SNI) with
-//! DBusMenu menus exposed as `gio::MenuModel`.
+//! System tray: `StatusNotifierWatcher` + `StatusNotifierHost` (SNI) with
+//! `DBusMenu` menus exposed as `gio::MenuModel`.
 //!
 //! We serve the watcher when nobody else does; otherwise we queue for its
 //! name and act as a host of the existing watcher (e.g. AGS), taking over
@@ -59,6 +59,14 @@ pub struct TrayItem {
     pub has_menu: bool,
 }
 
+impl std::fmt::Debug for Tray {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tray")
+            .field("menus", &self.menus)
+            .finish_non_exhaustive()
+    }
+}
+
 pub struct Tray {
     pub items: Signal<Vec<TrayItem>>,
     /// Whether we serve `org.kde.StatusNotifierWatcher` ourselves.
@@ -75,7 +83,7 @@ thread_local! {
 /// Started on first use (main thread only).
 pub fn get() -> Rc<Tray> {
     INSTANCE.with(|i| {
-        i.get_or_init(|| {
+        Rc::clone(i.get_or_init(|| {
             let this = Rc::new(Tray {
                 items: Signal::new(Vec::new()),
                 watcher_active: Signal::new(false),
@@ -86,8 +94,7 @@ pub fn get() -> Rc<Tray> {
             let weak = Rc::downgrade(&this);
             dbus::spawn("tray", async move { Tray::run(weak).await });
             this
-        })
-        .clone()
+        }))
     })
 }
 
@@ -99,7 +106,12 @@ impl Tray {
         }
         let reg = Arc::new(Mutex::new(Registry::default()));
         conn.object_server()
-            .at(watcher::PATH, Watcher { reg: reg.clone() })
+            .at(
+                watcher::PATH,
+                Watcher {
+                    reg: Arc::clone(&reg),
+                },
+            )
             .await?;
 
         let proxy = DBusProxy::new(&conn).await?;
@@ -129,7 +141,7 @@ impl Tray {
         conn.request_name(host.as_str()).await?;
         Self::sync(&weak, &conn, &host).await;
 
-        let w = weak.clone();
+        let w = Weak::clone(&weak);
         glib::spawn_future_local(async move {
             while let Some(s) = acquired.next().await {
                 if let (Ok(a), Some(this)) = (s.args(), w.upgrade())
@@ -140,7 +152,7 @@ impl Tray {
                 }
             }
         });
-        let w = weak.clone();
+        let w = Weak::clone(&weak);
         glib::spawn_future_local(async move {
             while let Some(s) = lost.next().await {
                 if let (Ok(a), Some(this)) = (s.args(), w.upgrade())
@@ -151,7 +163,7 @@ impl Tray {
             }
         });
 
-        let w = weak.clone();
+        let w = Weak::clone(&weak);
         let c = conn.clone();
         glib::spawn_future_local(async move {
             while let Some(Ok(msg)) = watcher_signals.next().await {
@@ -159,7 +171,7 @@ impl Tray {
                 let member = msg
                     .header()
                     .member()
-                    .map(|m| m.to_string())
+                    .map(std::string::ToString::to_string)
                     .unwrap_or_default();
                 let Ok(id) = msg.body().deserialize::<String>() else {
                     continue;
@@ -182,42 +194,54 @@ impl Tray {
                 }
                 continue;
             }
-            if a.new_owner.is_some() {
-                continue;
-            }
-            // `name` vanished: drop its items from our watcher and host.
-            let gone: Vec<String> = {
-                let mut r = reg.lock().unwrap();
-                let gone = r
-                    .items
-                    .iter()
-                    .filter(|i| split_id(i).0 == name)
-                    .cloned()
-                    .collect();
-                r.items.retain(|i| split_id(i).0 != name);
-                r.hosts.retain(|h| *h != name);
-                gone
-            };
-            if !gone.is_empty()
-                && let Ok(em) = SignalEmitter::new(&conn, watcher::PATH)
-            {
-                for id in &gone {
-                    let _ = Watcher::status_notifier_item_unregistered(&em, id).await;
-                }
-            }
-            let Some(this) = weak.upgrade() else { break };
-            let ids: Vec<String> = this
-                .items
-                .peek()
-                .iter()
-                .filter(|i| i.bus_name == name)
-                .map(|i| i.id.clone())
-                .collect();
-            for id in ids {
-                this.remove(&id);
+            if a.new_owner.is_none() && !Self::owner_vanished(&weak, &conn, &reg, &name).await {
+                break;
             }
         }
         Ok(())
+    }
+
+    /// `name` left the bus: drops its items from our watcher and host.
+    /// Returns `false` once the tray is gone.
+    async fn owner_vanished(
+        weak: &Weak<Self>,
+        conn: &Connection,
+        reg: &Mutex<Registry>,
+        name: &str,
+    ) -> bool {
+        let gone: Vec<String> = {
+            let mut r = reg.lock().expect("tray registry lock poisoned");
+            let gone = r
+                .items
+                .iter()
+                .filter(|i| split_id(i).0 == name)
+                .cloned()
+                .collect();
+            r.items.retain(|i| split_id(i).0 != name);
+            r.hosts.retain(|h| *h != name);
+            gone
+        };
+        if !gone.is_empty()
+            && let Ok(em) = SignalEmitter::new(conn, watcher::PATH)
+        {
+            for id in &gone {
+                let _ = Watcher::status_notifier_item_unregistered(&em, id).await;
+            }
+        }
+        let Some(this) = weak.upgrade() else {
+            return false;
+        };
+        let ids: Vec<String> = this
+            .items
+            .peek()
+            .iter()
+            .filter(|i| i.bus_name == name)
+            .map(|i| i.id.clone())
+            .collect();
+        for id in ids {
+            this.remove(&id);
+        }
+        true
     }
 
     /// Registers as host with the current watcher and loads its items.
@@ -267,7 +291,7 @@ impl Tray {
                 bus_name: bus.to_owned(),
                 object_path: path.clone(),
                 ..Default::default()
-            })
+            });
         });
         let (weak, conn, id2, bus) = (
             Rc::downgrade(self),
@@ -293,7 +317,7 @@ impl Tray {
                         let m = msg
                             .header()
                             .member()
-                            .map(|m| m.to_string())
+                            .map(std::string::ToString::to_string)
                             .unwrap_or_default();
                         if m.starts_with("New") {
                             break;
@@ -365,7 +389,6 @@ impl Tray {
     }
 
     fn call(
-        &self,
         id: &str,
         method: &'static str,
         args: impl serde::Serialize + zbus::zvariant::DynamicType + 'static,
@@ -388,28 +411,28 @@ impl Tray {
 
     /// Primary click at screen position `x`, `y`.
     pub fn activate(&self, id: &str, x: i32, y: i32) {
-        self.call(id, "Activate", (x, y));
+        Self::call(id, "Activate", (x, y));
     }
 
     /// Middle click.
     pub fn secondary_activate(&self, id: &str, x: i32, y: i32) {
-        self.call(id, "SecondaryActivate", (x, y));
+        Self::call(id, "SecondaryActivate", (x, y));
     }
 
-    /// Asks the app to show its own context menu (items without DBusMenu).
+    /// Asks the app to show its own context menu (items without `DBusMenu`).
     pub fn context_menu(&self, id: &str, x: i32, y: i32) {
-        self.call(id, "ContextMenu", (x, y));
+        Self::call(id, "ContextMenu", (x, y));
     }
 
     /// `orientation`: `vertical` or `horizontal`.
     pub fn scroll(&self, id: &str, delta: i32, orientation: &str) {
-        self.call(id, "Scroll", (delta, orientation.to_owned()));
+        Self::call(id, "Scroll", (delta, orientation.to_owned()));
     }
 
     /// The item's menu (created on first use, kept in sync).
     pub fn menu(&self, id: &str) -> Option<Rc<DbusMenu>> {
         if let Some(m) = self.menus.borrow().get(id) {
-            return Some(m.clone());
+            return Some(Rc::clone(m));
         }
         let item = self.items.peek().into_iter().find(|i| i.id == id)?;
         if !item.has_menu {
@@ -417,13 +440,13 @@ impl Tray {
         }
         let conn = self.conn.borrow().clone()?;
         let m = DbusMenu::new(conn, &item.bus_name, &item.menu_path);
-        self.menus.borrow_mut().insert(id.to_owned(), m.clone());
+        self.menus.borrow_mut().insert(id.to_owned(), Rc::clone(&m));
         Some(m)
     }
 }
 
 /// `(sa(iiay)ss)` → (title, body).
-fn tooltip(v: &Value) -> (String, String) {
+fn tooltip(v: &Value<'_>) -> (String, String) {
     let Value::Structure(s) = unwrap_variant(v) else {
         return Default::default();
     };
@@ -484,29 +507,42 @@ fn find_in_theme_path(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
 }
 
 /// Largest `a(iiay)` ARGB32 pixmap → PNG in the runtime dir.
-fn pixmap_file(v: &Value) -> Option<String> {
+fn pixmap_file(v: &Value<'_>) -> Option<String> {
     let Value::Array(a) = unwrap_variant(v) else {
         return None;
     };
-    let (w, h, stride, len, argb) = a
+    let (width, height, stride, len, argb) = a
         .iter()
-        .filter_map(|p| {
-            let Value::Structure(s) = unwrap_variant(p) else {
+        .filter_map(|pixmap| {
+            let Value::Structure(st) = unwrap_variant(pixmap) else {
                 return None;
             };
-            let f = s.fields();
-            let w = i32::try_from(v_i64(f.first()?)?).ok().filter(|&w| w > 0)?;
-            let h = i32::try_from(v_i64(f.get(1)?)?).ok().filter(|&h| h > 0)?;
+            let fields = st.fields();
+            let width = i32::try_from(v_i64(fields.first()?)?)
+                .ok()
+                .filter(|&w| w > 0)?;
+            let height = i32::try_from(v_i64(fields.get(1)?)?)
+                .ok()
+                .filter(|&h| h > 0)?;
             // Untrusted sizes: the rowstride must fit i32, the byte count usize.
-            let stride = w.checked_mul(4)?;
-            let len = (stride as usize).checked_mul(h as usize)?;
-            let data = v_bytes(f.get(2)?)?;
-            (data.len() >= len).then_some((w, h, stride, len, data))
+            let stride = width.checked_mul(4)?;
+            let len = usize::try_from(stride)
+                .ok()?
+                .checked_mul(usize::try_from(height).ok()?)?;
+            let data = v_bytes(fields.get(2)?)?;
+            (data.len() >= len).then_some((width, height, stride, len, data))
         })
         .max_by_key(|(_, _, _, len, _)| *len)?;
     let rgba = argb_to_rgba(&argb[..len]);
-    dbus::save_png(&dbus::runtime_dir("tray"), rgba, true, w, h, stride)
-        .map(|p| p.to_string_lossy().into_owned())
+    dbus::save_png(
+        &dbus::runtime_dir("tray"),
+        rgba,
+        dbus::Channels::Rgba,
+        width,
+        height,
+        stride,
+    )
+    .map(|p| p.to_string_lossy().into_owned())
 }
 
 /// SNI pixmaps are ARGB32 in network byte order.

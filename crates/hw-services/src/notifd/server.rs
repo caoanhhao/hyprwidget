@@ -10,15 +10,15 @@ use zbus::zvariant::OwnedValue;
 
 use super::hints::{Hints, parse_actions, parse_hints};
 
-pub const PATH: &str = "/org/freedesktop/Notifications";
-pub const NAME: &str = "org.freedesktop.Notifications";
+pub(super) const PATH: &str = "/org/freedesktop/Notifications";
+pub(super) const NAME: &str = "org.freedesktop.Notifications";
 
-pub enum Event {
+pub(super) enum Event {
     Notify(Box<Incoming>),
     Close(u32),
 }
 
-pub struct Incoming {
+pub(super) struct Incoming {
     pub id: u32,
     pub app_name: String,
     pub app_icon: String,
@@ -29,13 +29,14 @@ pub struct Incoming {
     pub expire_timeout: i32,
 }
 
-pub struct Server {
+pub(super) struct Server {
     pub tx: async_channel::Sender<Event>,
     pub next_id: Arc<AtomicU32>,
 }
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl Server {
+    #[expect(clippy::unused_self, reason = "zbus interface methods take &self")]
     fn get_capabilities(&self) -> Vec<&'static str> {
         vec![
             "actions",
@@ -48,7 +49,11 @@ impl Server {
         ]
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        clippy::needless_pass_by_value,
+        reason = "signature of the spec's Notify method; zbus hands over owned arguments"
+    )]
     fn notify(
         &self,
         app_name: String,
@@ -90,6 +95,7 @@ impl Server {
         let _ = self.tx.try_send(Event::Close(id));
     }
 
+    #[expect(clippy::unused_self, reason = "zbus interface methods take &self")]
     #[zbus(out_args("name", "vendor", "version", "spec_version"))]
     fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
         ("hyprwidget", "hyprwidget", env!("CARGO_PKG_VERSION"), "1.2")
