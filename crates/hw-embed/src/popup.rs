@@ -184,6 +184,9 @@ impl State {
             && p.mapped
         {
             p.mapped = false;
+            if p.grab {
+                crate::surface::swallow_next_click();
+            }
             if p.surface.alive() {
                 p.surface.send_popup_done();
             }
