@@ -1,0 +1,14 @@
+[package]
+name = "hw-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hw-core.workspace = true
+anyhow.workspace = true
+gtk4.workspace = true
+gtk4-layer-shell.workspace = true
+tracing.workspace = true

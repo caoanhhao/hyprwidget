@@ -1,0 +1,2 @@
+-- Entry point of the demo config (port of ~/.config/ags), see PLAN.md §3.7.
+-- Nothing is loaded yet: the Lua runtime arrives in M1.
