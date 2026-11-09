@@ -1,0 +1,8 @@
+{
+  "name": "sysmon",
+  "version": "1.0.0",
+  "description": "CPU / RAM / GPU meters from hw.service.sysinfo, and a btop terminal",
+  "entry": "init.lua",
+  "permissions": [],
+  "widgets": ["Sysmon", "SysmonMeter"]
+}

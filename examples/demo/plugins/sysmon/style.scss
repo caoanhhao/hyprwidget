@@ -1,0 +1,42 @@
+// Compiled before style/main.scss with "hypr" and "hw-theme" imported:
+// theme colors ($background, $foreground, $primary…) and Hyprland options.
+.sysmon {
+  padding: $general-gaps_in * 2;
+  border-radius: $decoration-rounding;
+  background-color: rgba($background, 0.85);
+  color: $foreground;
+}
+
+.sysmon-meter {
+  min-width: 220px;
+  margin: 4px 0;
+
+  .sysmon-icon {
+    min-width: 24px;
+    color: $primary;
+  }
+
+  .sysmon-detail {
+    opacity: 0.7;
+  }
+
+  progressbar > trough {
+    min-height: 6px;
+    border-radius: 3px;
+    background-color: rgba($foreground, 0.15);
+
+    > progress {
+      min-height: 6px;
+      border-radius: 3px;
+      background-color: $primary;
+    }
+  }
+}
+
+.sysmon-terminal {
+  border-radius: $decoration-rounding;
+}
+
+.plugin-error {
+  color: $urgent;
+}

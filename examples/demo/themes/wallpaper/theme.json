@@ -1,0 +1,7 @@
+{
+  "name": "wallpaper",
+  "version": "1.0.0",
+  "description": "Colors of the current wallpaper: the Material palette of hw.service.theme when available, else ~/.cache/cwal/colors.scss",
+  "source": "wallpaper",
+  "permissions": ["fs"]
+}
