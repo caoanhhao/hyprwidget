@@ -11,7 +11,7 @@ use serde_json::Value as Json;
 use crate::widgets::{Event, Handler, Prop};
 
 /// `self.title` / `self.app_id` signals of a `W.App`.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppSignals {
     pub title: Signal<Json>,
     pub app_id: Signal<Json>,
@@ -52,7 +52,9 @@ fn view(w: &gtk4::Widget) -> Option<&EmbedView> {
 pub fn signals(w: &gtk4::Widget) -> Option<AppSignals> {
     view(w)?;
     // SAFETY: set in `create` with this type.
-    unsafe { w.data::<AppSignals>(SIGNALS).map(|p| p.as_ref().clone()) }
+    let p = unsafe { w.data::<AppSignals>(SIGNALS) }?;
+    // SAFETY: the data lives as long as `w`, which outlives this borrow.
+    Some(unsafe { p.as_ref() }.clone())
 }
 
 pub fn pid(w: &gtk4::Widget) -> Option<u32> {
@@ -85,16 +87,19 @@ fn command(v: &Prop) -> Option<Vec<String>> {
     }
 }
 
-fn size(v: &Prop) -> Option<Option<(i32, i32)>> {
+/// `nil` (natural size), `{w, h}` or `{width = w, height = h}`.
+fn size(v: &Prop) -> Result<Option<(i32, i32)>, ()> {
+    let pair = |w: Option<i32>, h: Option<i32>| w.zip(h).map(Some).ok_or(());
     match v {
-        Prop::Nil => Some(None),
-        Prop::List(l) if l.len() == 2 => Some(Some((l[0].as_i32()?, l[1].as_i32()?))),
-        Prop::Map(_) => {
-            let w = v.get("width").or_else(|| v.get("w"))?.as_i32()?;
-            let h = v.get("height").or_else(|| v.get("h"))?.as_i32()?;
-            Some(Some((w, h)))
-        }
-        _ => None,
+        Prop::Nil => Ok(None),
+        Prop::List(l) if l.len() == 2 => pair(l[0].as_i32(), l[1].as_i32()),
+        Prop::Map(_) => pair(
+            v.get("width").or_else(|| v.get("w")).and_then(Prop::as_i32),
+            v.get("height")
+                .or_else(|| v.get("h"))
+                .and_then(Prop::as_i32),
+        ),
+        _ => Err(()),
     }
 }
 
@@ -109,7 +114,7 @@ pub fn set_prop(w: &gtk4::Widget, name: &str, v: &Prop) -> Result<(), String> {
             };
             view.set_env(m.iter().map(|(k, v)| (k.clone(), v.to_text())).collect());
         }
-        "size" => view.set_size(size(v).ok_or_else(bad)?),
+        "size" => view.set_size(size(v).map_err(|()| bad())?),
         "mode" => view.set_mode(v.as_str().ok_or_else(bad)?.parse::<Mode>()?),
         "restart" => view.set_restart(match v {
             Prop::Bool(true) => Restart::OnExit,
@@ -138,8 +143,8 @@ pub fn connect_event(w: &gtk4::Widget, name: &str, h: Handler) -> Result<(), Str
         "on_exit" => {
             let h = Rc::clone(&h);
             view.connect_exited(move |_, code| {
-                h(Event::Value(Prop::Num(code as f64)));
-            })
+                h(Event::Value(Prop::Num(f64::from(code))));
+            });
         }
         _ => return Err(format!("unknown event '{name}'")),
     }

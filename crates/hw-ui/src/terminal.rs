@@ -24,6 +24,7 @@ use gtk4::prelude::*;
 use gtk4::{gdk, glib, pango};
 use vte4::prelude::*;
 
+use crate::num::saturating_i64;
 use crate::widgets::Prop;
 
 /// Spawn parameters, colors and state, stored on the widget.
@@ -38,7 +39,15 @@ struct Term {
     on_exit: Vec<Rc<dyn Fn(i32)>>,
     /// Last `colors` / `transparent`, re-applied when either changes.
     colors: Option<Prop>,
-    transparent: bool,
+    background: Background,
+}
+
+/// Whether the terminal paints its `background` color (`transparent`).
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Background {
+    #[default]
+    Opaque,
+    Transparent,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -55,14 +64,14 @@ const DATA_KEY: &str = "hw-terminal";
 
 fn state(t: &vte4::Terminal) -> State {
     // SAFETY: the key is only ever used with `State`.
-    unsafe {
-        if let Some(p) = t.data::<State>(DATA_KEY) {
-            return p.as_ref().clone();
-        }
-        let s = State::default();
-        t.set_data(DATA_KEY, s.clone());
-        s
+    if let Some(p) = unsafe { t.data::<State>(DATA_KEY) } {
+        // SAFETY: the data lives as long as `t`, which outlives this borrow.
+        return Rc::clone(unsafe { p.as_ref() });
     }
+    let s = State::default();
+    // SAFETY: as above.
+    unsafe { t.set_data(DATA_KEY, Rc::clone(&s)) };
+    s
 }
 
 /// Creates the terminal widget; the child starts on first realize.
@@ -110,7 +119,8 @@ pub fn create() -> gtk4::Widget {
 
 /// `waitpid` status → exit code (128 + signal when killed).
 fn exit_code(status: i32) -> i32 {
-    if status & 0x7f == 0 {
+    // WIFEXITED: the low 7 bits (the terminating signal) are clear.
+    if status.trailing_zeros() >= 7 {
         (status >> 8) & 0xff
     } else {
         128 + (status & 0x7f)
@@ -189,7 +199,7 @@ fn rgba(v: &Prop) -> Option<gdk::RGBA> {
 
 /// Applies `colors = { foreground, background, cursor, palette = {…} }`;
 /// `color0`..`color15` work too (the shape of `hw.theme.colors`).
-fn set_colors(t: &vte4::Terminal, v: &Prop, transparent: bool) -> Result<(), String> {
+fn set_colors(t: &vte4::Terminal, v: &Prop, background: Background) -> Result<(), String> {
     let Prop::Map(m) = v else {
         return match v {
             Prop::Nil => Ok(()),
@@ -198,7 +208,9 @@ fn set_colors(t: &vte4::Terminal, v: &Prop, transparent: bool) -> Result<(), Str
     };
     let fg = m.get("foreground").and_then(rgba);
     let mut bg = m.get("background").and_then(rgba);
-    if transparent && let Some(b) = &mut bg {
+    if background == Background::Transparent
+        && let Some(b) = &mut bg
+    {
         b.set_alpha(0.0);
     }
     let mut palette: Vec<gdk::RGBA> = match m.get("palette") {
@@ -272,27 +284,30 @@ pub fn set_prop(w: &gtk4::Widget, name: &str, v: &Prop) -> Result<bool, String> 
             t.set_font(desc.as_ref());
         }
         "font_scale" => {
-            t.set_font_scale(v.as_f64().ok_or("Terminal: font_scale must be a number")?)
+            t.set_font_scale(v.as_f64().ok_or("Terminal: font_scale must be a number")?);
         }
         "colors" | "transparent" => {
-            let (colors, transparent) = {
+            let (colors, background) = {
                 let mut s = st.borrow_mut();
                 if name == "colors" {
                     s.colors = Some(v.clone());
+                } else if v.truthy() {
+                    s.background = Background::Transparent;
                 } else {
-                    s.transparent = v.truthy();
+                    s.background = Background::Opaque;
                 }
-                (s.colors.clone(), s.transparent)
+                (s.colors.clone(), s.background)
             };
             if let Some(c) = colors {
-                set_colors(t, &c, transparent)?;
+                set_colors(t, &c, background)?;
             }
         }
         "scrollback" => {
-            t.set_scrollback_lines(v.as_f64().ok_or("Terminal: scrollback must be a number")? as _)
+            let lines = v.as_f64().ok_or("Terminal: scrollback must be a number")?;
+            t.set_scrollback_lines(saturating_i64(lines));
         }
         "size" => {
-            let (c, r) = match v {
+            let (cols, rows) = match v {
                 Prop::List(l) if l.len() == 2 => (l[0].as_f64(), l[1].as_f64()),
                 Prop::Map(m) => (
                     m.get("cols").and_then(Prop::as_f64),
@@ -300,10 +315,10 @@ pub fn set_prop(w: &gtk4::Widget, name: &str, v: &Prop) -> Result<bool, String> 
                 ),
                 _ => (None, None),
             };
-            let (Some(c), Some(r)) = (c, r) else {
+            let (Some(cols), Some(rows)) = (cols, rows) else {
                 return Err("Terminal: size must be { cols, rows }".into());
             };
-            t.set_size(c as _, r as _);
+            t.set_size(saturating_i64(cols), saturating_i64(rows));
         }
         "cursor_blink" => t.set_cursor_blink_mode(if v.truthy() {
             vte4::CursorBlinkMode::On

@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod monitors;
+mod num;
 pub mod style;
 pub mod terminal;
 pub mod watch;
@@ -15,7 +16,7 @@ pub mod windows;
 pub use gtk4;
 pub use gtk4_layer_shell;
 
-/// GApplication id.
+/// `GApplication` id.
 pub const APP_ID: &str = "io.github.caoanhhao.hyprwidget";
 
 /// GTK's built-in theme. The desktop theme (gsettings `gtk-theme`, e.g.

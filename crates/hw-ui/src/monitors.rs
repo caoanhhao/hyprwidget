@@ -58,7 +58,7 @@ pub fn current() -> Vec<MonitorInfo> {
     let list = display.monitors();
     let mut v: Vec<MonitorInfo> = (0..list.n_items())
         .filter_map(|i| list.item(i).and_downcast::<gdk::Monitor>())
-        .filter(|m| m.is_valid())
+        .filter(gdk::Monitor::is_valid)
         .filter_map(MonitorInfo::new)
         .collect();
     v.sort_by_key(|m| (m.x, m.y));
@@ -78,7 +78,7 @@ pub fn watch() -> Signal<Vec<MonitorInfo>> {
             remove_source(id);
         }
         let weak = weak.clone();
-        let p2 = pending.clone();
+        let p2 = Rc::clone(&pending);
         let id = glib::timeout_add_local_once(DEBOUNCE, move || {
             p2.borrow_mut().take();
             if let Some(s) = weak.upgrade() {
