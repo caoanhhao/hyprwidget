@@ -55,6 +55,8 @@ pub struct Core {
     all_ns: RefCell<HashSet<String>>,
     /// `hw.layer_rule{}` calls of the current Lua config (as Lua source).
     pub extra_rules: RefCell<Vec<String>>,
+    /// `hw.service.*`, started on first use.
+    pub services: crate::service::Services,
 }
 
 impl Core {
@@ -78,6 +80,7 @@ impl Core {
             layer_ns: RefCell::default(),
             all_ns: RefCell::default(),
             extra_rules: RefCell::default(),
+            services: Default::default(),
         }))
     }
 
@@ -972,6 +975,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
         None => LuaSignal(Rc::new(MonitorsSource(Signal::new(Vec::new())))),
     };
     hw.set("monitors", monitors)?;
+    crate::service::install(lua, &hw)?;
     hw.set(
         "per_monitor",
         lua.create_function(|lua, f: Function| {
