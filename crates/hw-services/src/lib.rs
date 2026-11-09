@@ -19,6 +19,14 @@ pub mod brightness;
 pub mod hyprland;
 pub mod sysinfo;
 
+// D-Bus services (own Lua bridge in `hw-lua::dbus_services`).
+pub mod dbus;
+pub mod mpris;
+pub mod notifd;
+pub mod power_profiles;
+pub mod tray;
+pub mod upower;
+
 /// Starts service `name`; `None` if there is no such service. Called once per
 /// name, on the main thread, the first time Lua touches it.
 pub fn start(name: &str) -> Option<anyhow::Result<Rc<Service>>> {

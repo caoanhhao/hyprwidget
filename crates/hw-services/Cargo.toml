@@ -10,10 +10,14 @@ repository.workspace = true
 hw-core.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
+futures-util.workspace = true
+gdk-pixbuf.workspace = true
+gio.workspace = true
 glib.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+zbus.workspace = true
 freedesktop-desktop-entry = "0.8"
 nucleo-matcher = "0.3"
 sysinfo = { version = "0.40", default-features = false, features = ["disk", "component"] }

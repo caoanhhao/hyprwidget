@@ -5,6 +5,7 @@ pub mod app;
 pub mod builder;
 pub mod cairo;
 pub mod convert;
+pub mod dbus_services;
 pub mod monitor;
 pub mod runtime;
 pub mod service;
