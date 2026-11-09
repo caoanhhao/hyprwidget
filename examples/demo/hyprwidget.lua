@@ -1,2 +1,10 @@
--- Entry point of the demo config (port of ~/.config/ags), see PLAN.md §3.7.
--- Nothing is loaded yet: the Lua runtime arrives in M1.
+-- hyprwidget Lua config entrypoint (same layout as ~/.config/hypr/hyprland.lua).
+-- `require_all` loads config/<name>.lua in order; `require_custom_dir` then
+-- loads every config/custom/*.lua (per-option overrides written by the UI).
+require_all({
+  "general",
+  "decoration",
+  "bar",
+})
+
+require_custom_dir()

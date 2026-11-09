@@ -3,11 +3,26 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use hw_core::config::ConfigDir;
+use hw_core::ipc::{self, Request, Response};
 
 /// Wayland layer-shell widget framework: GTK4 + Lua.
 #[derive(Parser)]
 #[command(name = "hyprwidget", version, about)]
 struct Cli {
+    /// Config directory (default: $HYPRWIDGET_CONFIG, then
+    /// $XDG_CONFIG_HOME/hyprwidget). Used by `run`, `check` and offline
+    /// `option`.
+    #[arg(short, long, value_name = "DIR", global = true)]
+    config: Option<PathBuf>,
+    /// Instance name; the socket is $XDG_RUNTIME_DIR/hyprwidget/<instance>.sock.
+    #[arg(
+        short,
+        long,
+        env = "HYPRWIDGET_INSTANCE",
+        default_value = "default",
+        global = true
+    )]
+    instance: String,
     #[command(subcommand)]
     command: Command,
 }
@@ -15,12 +30,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Start the daemon.
-    Run {
-        /// Config directory (default: $HYPRWIDGET_CONFIG, then
-        /// $XDG_CONFIG_HOME/hyprwidget).
-        #[arg(short, long, value_name = "DIR")]
-        config: Option<PathBuf>,
-    },
+    Run,
     /// Call a request handler registered with `hw.on_request`.
     Request { name: String, args: Vec<String> },
     /// Reload styles, Lua, or both.
@@ -33,13 +43,15 @@ enum Command {
     /// Open the GTK Inspector.
     Inspect,
     /// Evaluate Lua code in the running instance.
-    Eval { code: String },
-    /// List windows.
+    Eval { code: Vec<String> },
+    /// List windows and request handlers.
     List,
-    /// Validate the config.
+    /// Validate the config (errors as file:line).
     Check,
     /// Print the merged value of an option, e.g. `decoration:rounding`.
     Option { name: String },
+    /// Stop the daemon.
+    Quit,
 }
 
 /// Renderer used when `GSK_RENDERER` is unset; see `docs/renderer.md`.
@@ -50,13 +62,22 @@ fn main() -> ExitCode {
         // SAFETY: still single-threaded; nothing has read the environment yet.
         unsafe { std::env::set_var("GSK_RENDERER", DEFAULT_GSK_RENDERER) };
     }
+    let cli = Cli::parse();
+    // The daemon logs at info; CLI commands only warn so their output stays clean.
+    let default_level = if matches!(cli.command, Command::Run) {
+        "info"
+    } else {
+        "warn"
+    };
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_level.into()),
         )
         .init();
 
-    match run(Cli::parse()) {
+    match run(cli) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("hyprwidget: {e:#}");
@@ -66,16 +87,84 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
-    match cli.command {
-        Command::Run { config } => {
-            let config = ConfigDir::resolve(config)?;
+    let ipc = |cmd: &str, args: Vec<String>| -> anyhow::Result<ExitCode> {
+        let resp = ipc::send(
+            &cli.instance,
+            &Request {
+                cmd: cmd.into(),
+                args,
+            },
+        )?;
+        print_response(&resp);
+        Ok(if resp.ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        })
+    };
+    match &cli.command {
+        Command::Run => {
+            let config = ConfigDir::resolve(cli.config.clone())?;
             tracing::info!(dir = %config.root.display(), lua = %hw_lua::lua_version().map_err(|e| anyhow::anyhow!("{e}"))?, "config");
-            let code = hw_ui::run(config)?;
-            Ok(ExitCode::from(code.get()))
+            let code = hw_lua::app::run(config, cli.instance.clone())?;
+            Ok(ExitCode::from(code.clamp(0, 255) as u8))
         }
-        _ => {
-            eprintln!("hyprwidget: not implemented yet");
+        Command::Request { name, args } => {
+            let mut a = vec![name.clone()];
+            a.extend(args.iter().cloned());
+            ipc("request", a)
+        }
+        Command::Reload { what } => ipc("reload", what.iter().cloned().collect()),
+        Command::Toggle { window } => ipc("toggle", vec![window.clone()]),
+        Command::Inspect => ipc("inspect", vec![]),
+        Command::Eval { code } => ipc("eval", vec![code.join(" ")]),
+        Command::List => ipc("list", vec![]),
+        Command::Quit => ipc("quit", vec![]),
+        Command::Option { name } => {
+            // Ask the daemon; without one, compute the merged value locally.
+            let req = Request {
+                cmd: "option".into(),
+                args: vec![name.clone()],
+            };
+            match ipc::send(&cli.instance, &req) {
+                Ok(resp) => {
+                    print_response(&resp);
+                    Ok(if resp.ok {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::FAILURE
+                    })
+                }
+                Err(_) => {
+                    let config = ConfigDir::resolve(cli.config.clone())?;
+                    let v = hw_lua::app::option_offline(config, name)?;
+                    println!("{}", hw_lua::app::format_option(&v));
+                    Ok(ExitCode::SUCCESS)
+                }
+            }
+        }
+        Command::Check => {
+            let config = ConfigDir::resolve(cli.config.clone())?;
+            let problems = hw_lua::app::check(config)?;
+            if problems.is_empty() {
+                println!("config ok");
+                return Ok(ExitCode::SUCCESS);
+            }
+            for p in &problems {
+                eprintln!("{p}");
+            }
             Ok(ExitCode::FAILURE)
         }
+    }
+}
+
+fn print_response(resp: &Response) {
+    if resp.output.is_empty() {
+        return;
+    }
+    if resp.ok {
+        println!("{}", resp.output);
+    } else {
+        eprintln!("{}", resp.output);
     }
 }

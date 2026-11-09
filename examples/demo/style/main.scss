@@ -1,0 +1,23 @@
+// `hypr` is generated from Hyprland's options (see `_hypr.scss` in
+// $XDG_RUNTIME_DIR/hyprwidget/<instance>/).
+@import "hypr";
+
+.bar {
+  padding: 4px 14px;
+  background-color: rgba(20, 20, 26, 0.72);
+  border-radius: $decoration-rounding;
+  color: #e6e6e6;
+}
+
+.bar .title {
+  font-weight: bold;
+}
+
+.bar .clock {
+  font-feature-settings: "tnum";
+}
+
+.bar button {
+  padding: 0 8px;
+  border-radius: calc(#{$decoration-rounding} / 2);
+}

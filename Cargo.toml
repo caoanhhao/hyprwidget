@@ -19,7 +19,11 @@ hw-embed = { path = "crates/hw-embed" }
 
 anyhow = "1"
 clap = { version = "4.6", features = ["derive", "env"] }
-gtk4 = "0.11"
+gtk4 = { version = "0.11", features = ["v4_18"] }
+glib = "0.22"
+gio = "0.22"
+async-channel = "2"
+grass = { version = "0.13", default-features = false }
 gtk4-layer-shell = "0.8"
 mlua = { version = "0.12", features = ["lua55", "async", "serialize"] }
 serde = { version = "1", features = ["derive"] }
