@@ -336,9 +336,10 @@ pub fn normalize(name: &str, v: &Value) -> Result<Value, String> {
     };
     let bad = || Err(format!("option '{name}' expects {}, got {v}", ty.name()));
     match ty {
-        OptType::Int if v.is_i64() || v.as_f64().is_some_and(|f| f.fract() == 0.0) => {
-            Ok(json!(v.as_f64().unwrap() as i64))
-        }
+        OptType::Int => match v.as_f64().filter(|f| f.fract() == 0.0) {
+            Some(f) => Ok(json!(f as i64)),
+            None => bad(),
+        },
         OptType::Float if v.is_number() => Ok(v.clone()),
         OptType::Bool => match v {
             Value::Bool(_) => Ok(v.clone()),
