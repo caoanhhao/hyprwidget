@@ -5,6 +5,7 @@ require_all({
   "general",
   "decoration",
   "bar",
+  "services",
 })
 
 require_custom_dir()

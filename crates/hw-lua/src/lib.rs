@@ -7,6 +7,7 @@ pub mod cairo;
 pub mod convert;
 pub mod monitor;
 pub mod runtime;
+pub mod service;
 pub mod signal;
 
 /// Version string reported by the embedded Lua state (`_VERSION`).
