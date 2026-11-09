@@ -55,6 +55,13 @@ impl UserData for Cairo {
             c.0.line_to(x, y);
             Ok(())
         });
+        m.add_method(
+            "arc",
+            |_, c, (xc, yc, r, a1, a2): (f64, f64, f64, f64, f64)| {
+                c.0.arc(xc, yc, r, a1, a2);
+                Ok(())
+            },
+        );
         m.add_method("rel_line_to", |_, c, (x, y): (f64, f64)| {
             c.0.rel_line_to(x, y);
             Ok(())

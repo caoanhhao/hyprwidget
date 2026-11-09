@@ -308,6 +308,7 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
     let mut events: Vec<(String, Function)> = Vec::new();
     let mut props: Vec<(String, Value)> = Vec::new();
     let (mut setup, mut draw, mut css, mut theme, mut visible) = (None, None, None, None, None);
+    let mut popover = None;
 
     for pair in t.pairs::<Value, Value>() {
         let (k, v) = pair?;
@@ -323,6 +324,8 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
                     "css" => css = Some(v),
                     "theme" => theme = Some(v),
                     "visible" => visible = Some(v),
+                    // Any widget may own a popover (MenuButton has a slot).
+                    "popover" if kind != Kind::MenuButton => popover = Some(v),
                     "name" if kind != Kind::Window => {
                         if let Value::String(s) = &v {
                             w.set_widget_name(&s.to_str()?);
@@ -393,6 +396,9 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
 
     for (slot, v) in slots {
         bind_slot(lua, w, kind, &slot, v, &keep)?;
+    }
+    if let Some(v) = popover {
+        attach_popover(lua, w, &v)?;
     }
     // After children so e.g. Stack `shown` can find its page.
     for (k, v) in &props {
@@ -526,6 +532,21 @@ fn bind_slot(
     let child = build(lua, &v)?;
     widgets::set_slot(w, kind, slot, child.as_ref()).map_err(rt_err)?;
     let _ = keep;
+    Ok(())
+}
+
+/// `popover = W.Popover{…}` on a widget other than MenuButton: the popover
+/// is parented to the widget (open it with its `open` prop) and unparented
+/// with it.
+fn attach_popover(lua: &Lua, w: &gtk4::Widget, v: &Value) -> Result<()> {
+    let Some(child) = build(lua, v)? else {
+        return Ok(());
+    };
+    let p = child
+        .downcast::<gtk4::Popover>()
+        .map_err(|_| rt_err("`popover` must be a W.Popover"))?;
+    p.set_parent(w);
+    w.connect_destroy(move |_| p.unparent());
     Ok(())
 }
 
