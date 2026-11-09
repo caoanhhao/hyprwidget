@@ -19,6 +19,25 @@ pub struct App {
     core: Rc<Core>,
     runtime: RefCell<Option<Runtime>>,
     keep: RefCell<Vec<Box<dyn std::any::Any>>>,
+    /// A Lua (re)load is running; the CSS is compiled once it is done.
+    loading: std::cell::Cell<bool>,
+    /// A generated partial changed while loading.
+    css_dirty: std::cell::Cell<bool>,
+}
+
+/// Writes `_hw-theme.scss`; returns whether it changed.
+fn write_theme(core: &Core) -> bool {
+    let Some(ui) = &core.ui else { return false };
+    match ui
+        .styles
+        .write_partial(crate::theme::PARTIAL, &core.theme.scss())
+    {
+        Ok(changed) => changed,
+        Err(e) => {
+            tracing::error!("theme partial: {e:#}");
+            false
+        }
+    }
 }
 
 fn gen_dir(instance: &str) -> Result<PathBuf> {
@@ -76,6 +95,8 @@ impl App {
             core: core.clone(),
             runtime: RefCell::new(None),
             keep: RefCell::new(Vec::new()),
+            loading: Default::default(),
+            css_dirty: Default::default(),
         });
         // Keep running without windows (e.g. while the Lua config is broken).
         app.keep(gtk_app.hold());
@@ -89,6 +110,28 @@ impl App {
         };
         regen(&core.options.tree().peek());
         app.keep(core.options.tree().subscribe(regen));
+
+        // Theme → `_hw-theme.scss`, recompiled when it changes (the initial
+        // compile happens after the first Lua load).
+        let ui = core.ui().anyhow()?;
+        ui.styles.set_extra_error_hook(Rc::new(|key, msg| {
+            crate::plugin::notify(&format!("hyprwidget: {key} stylesheet failed"), msg)
+        }));
+        write_theme(&core);
+        for sig in [core.theme.name.clone(), core.theme.colors.clone()] {
+            let weak = Rc::downgrade(&app);
+            app.keep(sig.subscribe(move |_| {
+                if let Some(app) = weak.upgrade()
+                    && write_theme(&app.core)
+                {
+                    if app.loading.get() {
+                        app.css_dirty.set(true);
+                    } else {
+                        app.reload_css();
+                    }
+                }
+            }));
+        }
 
         app.reload_lua();
         app.reload_css();
@@ -124,20 +167,21 @@ impl App {
             .settings_file
             .parent()
             .map(PathBuf::from);
-        let watcher = watch::watch(
-            &app.core.dir.root,
-            &cache.into_iter().collect::<Vec<_>>(),
-            move |c: Changes| {
-                let Some(app) = weak.upgrade() else { return };
-                if c.lua {
-                    tracing::info!("config changed: reloading Lua");
-                    app.reload_lua();
-                }
-                if c.css || c.lua {
-                    app.reload_css();
-                }
-            },
-        );
+        // Plugins are watched one by one (crate::plugin).
+        let skip: Vec<PathBuf> = cache
+            .into_iter()
+            .chain([app.core.dir.root.join(crate::plugin::PLUGINS_DIR)])
+            .collect();
+        let watcher = watch::watch(&app.core.dir.root, &skip, move |c: Changes| {
+            let Some(app) = weak.upgrade() else { return };
+            if c.lua {
+                tracing::info!("config changed: reloading Lua");
+                app.reload_lua();
+            }
+            if c.css || c.lua {
+                app.reload_css();
+            }
+        });
         app.keep(watcher);
         Ok(app)
     }
@@ -159,6 +203,8 @@ impl App {
     pub fn reload_lua(&self) {
         // Drop the old runtime first: closes windows and stops timers.
         self.runtime.borrow_mut().take();
+        self.loading.set(true);
+        let _done = scopeguard(|| self.loading.set(false));
         match self.core.dir.load_app() {
             Ok(cfg) => {
                 if let Some(ui) = &self.core.ui {
@@ -191,6 +237,7 @@ impl App {
     }
 
     pub fn reload_css(&self) {
+        self.css_dirty.set(false);
         if let Some(ui) = &self.core.ui
             && let Err(e) = ui.styles.reload_user()
         {
@@ -225,7 +272,12 @@ impl App {
                 let app = self.clone();
                 glib::idle_add_local_once(move || match what.as_str() {
                     "css" => app.reload_css(),
-                    "lua" => app.reload_lua(),
+                    "lua" => {
+                        app.reload_lua();
+                        if app.css_dirty.get() {
+                            app.reload_css();
+                        }
+                    }
                     _ => {
                         app.reload_lua();
                         app.reload_css();
@@ -267,6 +319,7 @@ impl App {
                 Response::ok(out.trim_end())
             }
             "option" => Response::ok(format_option(&self.core.options.get(&arg(0)))),
+            "theme" => self.theme_cmd(req.args.first().map(String::as_str)),
             "inspect" => {
                 gtk4::Window::set_interactive_debugging(true);
                 Response::ok("")
@@ -281,6 +334,50 @@ impl App {
         };
         reply.send(resp);
     }
+}
+
+impl App {
+    /// `hyprwidget theme [name|none]`: switch, or show the current theme.
+    fn theme_cmd(&self, name: Option<&str>) -> Response {
+        let rt = self.runtime.borrow();
+        let Some(rt) = rt.as_ref() else {
+            return Response::err("Lua config is not loaded");
+        };
+        if let Some(n) = name {
+            let n = Some(n).filter(|n| *n != "none" && !n.is_empty());
+            return match crate::theme::switch(&rt.lua, n) {
+                Ok(()) => Response::ok(""),
+                Err(e) => Response::err(crate::runtime::compact_error(&e.to_string())),
+            };
+        }
+        let cur = self.core.theme.name.peek();
+        let mut out = String::new();
+        for t in crate::theme::list(&self.core.dir.root) {
+            let mark = if cur.as_str() == Some(t.as_str()) {
+                "*"
+            } else {
+                " "
+            };
+            out.push_str(&format!("{mark} {t}\n"));
+        }
+        if cur.is_null() {
+            out.push_str("* none\n");
+        }
+        Response::ok(out.trim_end())
+    }
+}
+
+/// Runs `f` on drop.
+fn scopeguard(f: impl FnOnce()) -> impl Drop {
+    struct G<F: FnOnce()>(Option<F>);
+    impl<F: FnOnce()> Drop for G<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.0.take() {
+                f()
+            }
+        }
+    }
+    G(Some(f))
 }
 
 /// Prints an option value: strings raw, everything else as JSON.
@@ -361,10 +458,31 @@ pub fn check(dir: ConfigDir) -> Result<Vec<String>> {
     for (name, text) in core.scss_partials.borrow().iter() {
         hw_ui::style::write_partial(&gen_tmp, name, text)?;
     }
+    hw_ui::style::write_partial(&gen_tmp, crate::theme::PARTIAL, &core.theme.scss())?;
     let style_dir = cfg.style.parent().map(PathBuf::from).unwrap_or_default();
     if let Err(e) = hw_ui::style::compile_file(&cfg.style, &[&style_dir, &gen_tmp]) {
         problems.push(format!("{e:#}"));
     }
+
+    // Every plugin.json / theme.json (also the disabled ones) and the
+    // stylesheets of the loaded plugins.
+    for f in crate::plugin::discover(&dir.root) {
+        if let Err(e) = f.manifest {
+            problems.extend(e);
+        } else if let Ok(m) = f.manifest.as_ref()
+            && crate::plugin::loaded_ok(&rt.lua).contains(&m.name)
+        {
+            let style = f.dir.join(&m.style);
+            if style.is_file()
+                && let Err(e) = hw_ui::style::compile_extra(&style, &gen_tmp)
+            {
+                problems.push(format!("{e:#}"));
+            }
+        }
+    }
+    problems.extend(crate::theme::check_all(&dir.root));
+    let mut seen = std::collections::HashSet::new();
+    problems.retain(|p| seen.insert(p.clone()));
     let _ = std::fs::remove_dir_all(&gen_tmp);
     Ok(problems)
 }

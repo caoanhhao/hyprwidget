@@ -48,6 +48,8 @@ enum Command {
     List,
     /// Validate the config (errors as file:line).
     Check,
+    /// Switch theme (`none` = no theme), or list themes (current marked `*`).
+    Theme { name: Option<String> },
     /// Print the merged value of an option, e.g. `decoration:rounding`.
     Option { name: String },
     /// Stop the daemon.
@@ -120,6 +122,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Command::Eval { code } => ipc("eval", vec![code.join(" ")]),
         Command::List => ipc("list", vec![]),
         Command::Quit => ipc("quit", vec![]),
+        Command::Theme { name } => ipc("theme", name.iter().cloned().collect()),
         Command::Option { name } => {
             // Ask the daemon; without one, compute the merged value locally.
             let req = Request {
