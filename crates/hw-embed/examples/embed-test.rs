@@ -1,6 +1,6 @@
 //! Dev harness for the M0.5 spike: a layer-shell window with one `EmbedView`.
 //!
-//! `cargo run -p hw-embed --example embed-test -- foot`
+//! `cargo run -p hw-embed --example embed-test -- kitty` (default: kitty)
 //! Size with `HW_EMBED_SIZE=WxH` (default 900x600). `kill -USR1` toggles the
 //! view's visibility (frame callbacks must stop while it is hidden).
 
@@ -21,7 +21,7 @@ fn main() -> glib::ExitCode {
 
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let argv = if argv.is_empty() {
-        vec!["foot".to_string()]
+        vec!["kitty".to_string()]
     } else {
         argv
     };
