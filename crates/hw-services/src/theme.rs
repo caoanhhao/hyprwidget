@@ -29,7 +29,7 @@ use serde_json::{Map, Value, json};
 
 use crate::service::{Pusher, Service, arg_str, cache_dir};
 
-const PROPS: &[&str] = &[
+pub const PROPS: &[&str] = &[
     "colors",
     "mode",
     "source",

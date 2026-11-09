@@ -24,7 +24,7 @@ use serde_json::{Map, Value, json};
 
 use crate::service::{Pusher, Service, arg_f64};
 
-const PROPS: &[&str] = &[
+pub const PROPS: &[&str] = &[
     "available",
     "speaker",
     "microphone",

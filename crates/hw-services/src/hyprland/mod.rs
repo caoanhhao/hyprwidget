@@ -20,7 +20,7 @@ use crate::service::{Pusher, Service, arg_str, join_args};
 use events::dirty;
 
 /// Props, in the order [`fetch`] fills them.
-const PROPS: &[&str] = &[
+pub const PROPS: &[&str] = &[
     "available",
     "workspaces",
     "monitors",

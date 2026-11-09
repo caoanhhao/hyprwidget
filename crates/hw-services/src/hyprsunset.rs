@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 
 use crate::service::{Pusher, Service, arg_f64};
 
-const PROPS: &[&str] = &["available", "temperature", "gamma", "identity"];
+pub const PROPS: &[&str] = &["available", "temperature", "gamma", "identity"];
 const POLL: Duration = Duration::from_secs(10);
 
 pub fn start() -> Result<Rc<Service>> {
