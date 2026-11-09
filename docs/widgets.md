@@ -214,6 +214,9 @@ W.Window {
 
 - `W.Window` chỉ dùng ở top-level: trả về từ `hyprwidget.lua`, từ hàm `per_monitor`,
   hoặc tạo bằng `hw.window.new{…}`.
+- Window bắt đầu ẩn (`visible = false` hoặc Signal đang `false`) chỉ dựng cây con lần
+  đầu được hiện (`hyprwidget toggle`, `:show()`, Signal `visible` thành `true`); trước
+  đó `:widget()` chưa có con, lỗi dựng cây con được ghi log lúc hiện (`docs/memory.md`).
 - Mỗi namespace được tự đăng ký layer rule blur theo `decoration:blur:*` (tắt bằng
   `"layer_rules": false` trong `config.json`); thêm rule riêng bằng
   `hw.layer_rule{ match = { namespace = "bar" }, … }` (gửi `hl.layer_rule(...)` cho

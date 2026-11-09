@@ -15,6 +15,8 @@ một màn hình (DP-2).
   cùng một window 10–30 lần không còn tăng (0–180 KB / 10 lần).
 - **Ngân sách < 80 MB chưa đạt** với demo đầy đủ: ~73 MB anon ngay khi khởi động,
   **105–150 MB** sau khi đã mở mọi window. Framework rỗng (1 window, 1 label) là 41 MB.
+  Sau M6, window ẩn được dựng lười: **~56.5 MB** lúc khởi động (xem
+  [Dựng window lười](#dựng-window-lười)); mức sau khi đã mở mọi window không đổi.
 - `VmRSS` (~330–380 MB) không phải thước đo phù hợp trên NVIDIA: ~150–180 MB là thư
   viện driver map từ file (dùng chung giữa các process). Dùng **RssAnon** (bộ nhớ riêng
   của process) và **PSS**.
@@ -76,15 +78,41 @@ window khác ±0.2 MB; user-panel thêm 3 × 10 lần: +0.18, +0.01, 0 MB → b�
 |---|---|
 | Framework rỗng, renderer `vulkan` / `gl` / `cairo` | 40.6 / 41.3 / 27.3 MB |
 | Demo đầy đủ lúc khởi động, `vulkan` / `cairo` | 73.0 / 58.7 MB |
+| Demo đầy đủ lúc khởi động, dựng window lười, `vulkan` | 56.5 MB |
 | Demo sau khi mở mọi window 2 lần, `vulkan` / `cairo` | 106.6 / 85.3 MB |
 
 - **Driver NVIDIA (Vulkan)**: ~14 MB lúc khởi động, ~21 MB sau khi mở mọi window
   (chênh lệch vulkan − cairo).
 - **Dựng sẵn mọi window**: ~32 MB (73 − 41). Mọi window `per_monitor` của demo (15
-  window, đa số ẩn) được dựng toàn bộ cây widget + style ngay lúc khởi động.
+  window, đa số ẩn) được dựng toàn bộ cây widget + style ngay lúc khởi động. Trong
+  đó ~16 MB là 11 window ẩn (nay dựng lười); ~16 MB còn lại là các window hiện sẵn (bar,
+  always-on, 2 hover) và service/state Lua mà demo khởi động.
 - **Cache sau lần mở đầu**: ~26–40 MB (texture ảnh/thumbnail, glyph, icon theme,
   pipeline GPU, VTE).
 - Trong anon: `[heap]` của main thread chiếm ~75% (82 / 107 MB); arena của các thread worker cộng lại < 12 MB.
+
+## Dựng window lười
+
+Top-level `W.Window{ visible = false, … }` (hoặc `visible` là signal đang `false`)
+chỉ tạo layer window, đặt prop/class/event của window và đăng ký tên; cây con (slot
+`child`) được dựng lần đầu window hiện — `hyprwidget toggle`, `hw.window.get(n):show()`
+/ `:toggle()`, signal `visible` chuyển sang `true` — **trước** `present()`, nên layer
+surface được map với kích thước cuối (`hw_ui::windows::present`,
+`defer_content`; `connect_show` làm dự phòng). `hyprwidget list`, `toggle`, dựng lại
+`per_monitor`, `reload lua` và `check` (headless, không dựng window) không đổi. Lỗi
+khi dựng cây con lúc hiện được ghi log (`window '<tên>': …`) thay vì làm hỏng lúc nạp
+config. Hệ quả: `:widget()` của window chưa từng hiện chưa có con.
+
+Đo lại 2026-11-09 (cùng máy, release, `hyprwidget run -c examples/demo`, RssAnon sau
+~21 s, 3 lần chạy xen kẽ):
+
+| | lần 1 | lần 2 | lần 3 |
+|---|---|---|---|
+| trước (commit `4578c0f`) | 76.7 | 72.8 | 72.8 MB |
+| dựng lười | 56.2 | 56.8 | 56.7 MB |
+
+Kích thước layer khi mở lần đầu giống hệt bản cũ (right-panel 308×980). Chưa đo lại
+mức sau khi mở mọi window theo kịch bản lần 2; chi phí dựng chỉ dời sang lần mở đầu.
 
 ## Lỗi đã sửa trong M6
 
@@ -108,8 +136,8 @@ window hiện/ẩn).
 - Chưa chạy đủ **24h**; kết luận "không tăng" dựa trên ~35 phút (2 lần đo) với
   phẳng ở cuối mỗi lần.
 - Để xuống dưới 80 MB với demo đầy đủ:
-  1. **Dựng window lười**: window `visible = false` chỉ dựng cây widget khi hiện lần
-     đầu (tiết kiệm phần lớn ~32 MB lúc khởi động); tuỳ chọn huỷ cây khi ẩn lâu.
+  1. ~~**Dựng window lười**~~ (đã làm, −16 MB lúc khởi động, xem trên); còn lại: tuỳ
+     chọn huỷ cây khi ẩn lâu để trả lại bộ nhớ sau lần mở đầu.
   2. Wallpaper switcher (+15 MB qua hai lần mở đầu): mỗi lần `on_show` nó dựng lại các
      `Picture` dùng CSS `background-image` của file thumbnail; nên đo lại với
      `W.Picture` (texture giải phóng cùng widget) thay cho ảnh nền CSS.
