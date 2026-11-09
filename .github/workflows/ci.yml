@@ -11,13 +11,13 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Arch ships gtk4, gtk4-layer-shell and Lua 5.5 matching the dev machine.
+    # Arch ships gtk4, gtk4-layer-shell, vte4 and Lua 5.5 matching the dev machine.
     container: archlinux:latest
     steps:
       - name: Install system packages
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel git rustup pkgconf gtk4 gtk4-layer-shell lua
+            base-devel git rustup pkgconf gtk4 gtk4-layer-shell vte4 lua
           rustup default stable
           rustup component add rustfmt clippy
 
