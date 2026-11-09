@@ -12,6 +12,7 @@ glib-unix = "0.22"
 gtk4 = { workspace = true, features = ["v4_16"] }
 libc = "0.2"
 smithay = { version = "0.7", default-features = false, features = ["wayland_frontend", "backend_drm"] }
+serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

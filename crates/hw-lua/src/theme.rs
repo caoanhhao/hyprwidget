@@ -804,7 +804,10 @@ mod tests {
         assert_eq!(t.colors.peek()["primary"], "#fedcba");
         t.remove_source("wallpaper");
         assert_eq!(t.colors.peek()["primary"], "#111111");
-        assert!(!t.scss().contains("$primary: #111111;"), "no theme: palette kept");
+        assert!(
+            !t.scss().contains("$primary: #111111;"),
+            "no theme: palette kept"
+        );
         t.name.set(json!("x"));
         let scss = t.scss();
         assert!(scss.contains("$primary: #111111;"), "{scss}");

@@ -48,6 +48,7 @@ impl UserData for LuaWidget {
     fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
         f.add_field_method_get("kind", |_, w| Ok(w.kind.map(Kind::name)));
         f.add_field_method_get("name", |_, w| Ok(w.widget.widget_name().to_string()));
+        crate::app_widget::add_fields(f);
     }
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
@@ -119,6 +120,7 @@ impl UserData for LuaWidget {
         m.add_meta_method(MetaMethod::ToString, |_, w, ()| {
             Ok(format!("Widget({})", w.kind.map(Kind::name).unwrap_or("?")))
         });
+        crate::app_widget::add_methods(m);
     }
 }
 
@@ -365,6 +367,9 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
         Kind::Terminal if !has("colors") => {
             let sig = lua.create_userdata(LuaSignal::json(st.core.theme.colors.clone(), None))?;
             bind_prop(w, kind, "colors", &Value::UserData(sig), &keep)?
+        }
+        Kind::App if !has("rounding") => {
+            bind_option(lua, w, kind, "rounding", "decoration:rounding", &keep)?
         }
         _ => {}
     }

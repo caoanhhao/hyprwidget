@@ -10,6 +10,7 @@ require_all({
   "notifications",
   "launcher",
   "sysmon",
+  "embed",
 })
 
 require_custom_dir()

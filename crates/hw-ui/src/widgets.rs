@@ -106,6 +106,7 @@ pub enum Kind {
     DrawingArea,
     Calendar,
     Terminal,
+    App,
 }
 
 impl Kind {
@@ -132,6 +133,7 @@ impl Kind {
         Kind::DrawingArea,
         Kind::Calendar,
         Kind::Terminal,
+        Kind::App,
     ];
 
     pub fn name(self) -> &'static str {
@@ -158,6 +160,7 @@ impl Kind {
             Kind::DrawingArea => "DrawingArea",
             Kind::Calendar => "Calendar",
             Kind::Terminal => "Terminal",
+            Kind::App => "App",
         }
     }
 
@@ -221,6 +224,7 @@ pub fn create(kind: Kind) -> gtk4::Widget {
         Kind::DrawingArea => gtk4::DrawingArea::new().upcast(),
         Kind::Calendar => gtk4::Calendar::new().upcast(),
         Kind::Terminal => crate::terminal::create(),
+        Kind::App => crate::app::create(),
     };
     if kind == Kind::Box {
         // Orientation defaults; `vertical = true` flips it.
@@ -396,6 +400,7 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
         (Kind::Window, _) => {
             return set_window_prop(w.downcast_ref().unwrap(), name, v).map_err(|_| bad());
         }
+        (Kind::App, _) => return crate::app::set_prop(w, name, v),
 
         (Kind::Box, "vertical") => w
             .downcast_ref::<gtk4::Box>()
@@ -1090,6 +1095,7 @@ pub const EVENTS: &[&str] = &[
     "on_show",
     "on_hide",
     "on_destroy",
+    "on_title",
     "on_exit",
 ];
 
@@ -1247,7 +1253,7 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
                 h(Event::Destroy);
             });
         }
-        "on_exit" => {
+        "on_exit" if w.is::<vte4::Terminal>() => {
             crate::terminal::connect_exit(
                 w,
                 Rc::new(move |code| {
@@ -1255,6 +1261,7 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
                 }),
             )?;
         }
+        "on_title" | "on_exit" => return crate::app::connect_event(w, name, h),
         _ => return Err(format!("unknown event '{name}'")),
     }
     Ok(())

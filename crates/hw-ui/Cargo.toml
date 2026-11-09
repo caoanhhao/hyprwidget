@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 hw-core.workspace = true
+hw-embed.workspace = true
 anyhow.workspace = true
 gtk4.workspace = true
 gtk4-layer-shell.workspace = true
