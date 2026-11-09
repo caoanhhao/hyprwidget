@@ -18,6 +18,7 @@ pub mod battery;
 pub mod brightness;
 pub mod hyprland;
 pub mod hyprsunset;
+pub mod keystrokes;
 pub mod sysinfo;
 pub mod theme;
 
@@ -41,6 +42,7 @@ pub fn start(name: &str) -> Option<anyhow::Result<Rc<Service>>> {
         "brightness" => brightness::start(),
         "hyprsunset" => hyprsunset::start(),
         "theme" => theme::start(),
+        "keystrokes" => keystrokes::start(),
         _ => return None,
     })
 }
@@ -55,4 +57,5 @@ pub const NAMES: &[&str] = &[
     "brightness",
     "hyprsunset",
     "theme",
+    "keystrokes",
 ];

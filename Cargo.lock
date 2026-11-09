@@ -1224,12 +1224,14 @@ dependencies = [
  "gio",
  "glib",
  "hw-core",
+ "libc",
  "material-colors",
  "nucleo-matcher",
  "serde",
  "serde_json",
  "sysinfo",
  "tracing",
+ "xkbcommon",
  "zbus",
 ]
 

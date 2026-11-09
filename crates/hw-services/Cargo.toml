@@ -22,3 +22,5 @@ freedesktop-desktop-entry = "0.8"
 nucleo-matcher = "0.3"
 sysinfo = { version = "0.40", default-features = false, features = ["disk", "component"] }
 material-colors = "0.4"
+xkbcommon = { version = "0.8", default-features = false }
+libc = "0.2"
