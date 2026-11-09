@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use crate::service::{Service, arg_f64, arg_str, cache_dir};
 
-const PROPS: &[&str] = &["list", "history"];
+pub const PROPS: &[&str] = &["list", "history"];
 /// Entries kept in `history`.
 const HISTORY_LEN: usize = 20;
 

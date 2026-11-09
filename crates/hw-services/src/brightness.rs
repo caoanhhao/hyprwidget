@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use crate::service::{Pusher, Service, arg_f64, arg_str};
 
-const PROPS: &[&str] = &["available", "brightness", "displays"];
+pub const PROPS: &[&str] = &["available", "brightness", "displays"];
 const BACKLIGHT: &str = "/sys/class/backlight";
 const BACKLIGHT_EVERY: Duration = Duration::from_secs(2);
 /// DDC reads happen every this many backlight ticks (30 s).

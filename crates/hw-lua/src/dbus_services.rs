@@ -401,7 +401,15 @@ fn tray_table(lua: &Lua) -> Result<Table> {
         w.widget
             .insert_action_group(tray::ACTION_PREFIX, Some(&menu.actions));
         if let Some(btn) = w.widget.downcast_ref::<gtk4::MenuButton>() {
-            btn.set_menu_model(Some(&menu.model));
+            btn.set_menu_model(Some(&menu.model()));
+            let weak_btn = btn.downgrade();
+            menu.connect_model(move |m| {
+                let Some(b) = weak_btn.upgrade() else {
+                    return false;
+                };
+                b.set_menu_model(Some(m));
+                true
+            });
             let weak = Rc::downgrade(&menu);
             btn.connect_active_notify(move |b| {
                 if b.is_active()
@@ -426,7 +434,15 @@ fn tray_table(lua: &Lua) -> Result<Table> {
         menu.about_to_show();
         w.widget
             .insert_action_group(tray::ACTION_PREFIX, Some(&menu.actions));
-        let pop = gtk4::PopoverMenu::from_model(Some(&menu.model));
+        let pop = gtk4::PopoverMenu::from_model(Some(&menu.model()));
+        let weak_pop = pop.downgrade();
+        menu.connect_model(move |m| {
+            let Some(p) = weak_pop.upgrade() else {
+                return false;
+            };
+            p.set_menu_model(Some(m));
+            true
+        });
         pop.set_parent(&w.widget);
         pop.connect_closed(|p| {
             let p = p.clone();

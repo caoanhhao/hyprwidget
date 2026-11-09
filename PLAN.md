@@ -333,16 +333,28 @@ JSON tương đương: `{"type":"App","command":["foot","-e","btop"],"keep_alive
 
 ## 7. Lộ trình (milestones)
 
-| # | Nội dung | Kết quả kiểm chứng |
-|---|---|---|
-| **M0** | Workspace cargo (repo `github.com/caoanhhao/hyprwidget`), CI `cargo clippy/test`, binary `hyprwidget run` mở 1 layer-shell window; đo renderer ngl/vulkan | Thấy window trên Hyprland |
-| **M0.5** | Spike `hw-embed` (mục 6.6 bước 1–2): `foot` hiện trong layer surface, dmabuf + syncobj trên NVIDIA | Thấy foot chạy trong window hyprwidget, không nhòe |
-| **M1** | `hw-core` reactive + `hw-ui` builder + `hw-lua` DSL cơ bản + SCSS (grass) + hot-reload + JSON settings + IPC + option kế thừa Hyprland + cấu trúc config kiểu Hyprland (3.6, 3.7) | Bar "hello" viết bằng Lua, sửa file → cập nhật nóng |
-| **M2** | Services: Hyprland, Notifd, Mpris, Tray, Audio, Battery, PowerProfiles, Apps, sysinfo | Lua đọc được dữ liệu reactive |
-| **M3** | Example 1 bước 1–3 (Bar, Notifications, Launcher) | Thay được AGS cho phần chính |
-| **M4** | Example 1 bước 4–7, plugin/theme system, `W.Terminal` | Port đầy đủ AGS |
-| **M5** | `hw-embed` hoàn chỉnh (mục 6.6 bước 3–5), `W.App` trong Lua/JSON | Ma trận app chạy được, gõ tiếng Việt được trong app nhúng |
-| **M6** | Tài liệu API Lua (+ file type stub cho LuaLS để có autocomplete), ví dụ plugin | |
+| # | Nội dung | Kết quả kiểm chứng | Trạng thái |
+|---|---|---|---|
+| **M0** | Workspace cargo (repo `github.com/caoanhhao/hyprwidget`), CI `cargo clippy/test`, binary `hyprwidget run` mở 1 layer-shell window; đo renderer ngl/vulkan | Thấy window trên Hyprland | ✅ |
+| **M0.5** | Spike `hw-embed` (mục 6.6 bước 1–2): `foot` hiện trong layer surface, dmabuf + syncobj trên NVIDIA | Thấy foot chạy trong window hyprwidget, không nhòe | ✅ (foot → sau đó thử bằng kitty) |
+| **M1** | `hw-core` reactive + `hw-ui` builder + `hw-lua` DSL cơ bản + SCSS (grass) + hot-reload + JSON settings + IPC + option kế thừa Hyprland + cấu trúc config kiểu Hyprland (3.6, 3.7) | Bar "hello" viết bằng Lua, sửa file → cập nhật nóng | ✅ |
+| **M2** | Services: Hyprland, Notifd, Mpris, Tray, Audio, Battery, PowerProfiles, Apps, sysinfo | Lua đọc được dữ liệu reactive | ✅ |
+| **M3** | Example 1 bước 1–3 (Bar, Notifications, Launcher) | Thay được AGS cho phần chính | ✅ |
+| **M4** | Example 1 bước 4–7, plugin/theme system, `W.Terminal` | Port đầy đủ AGS | ✅ |
+| **M5** | `hw-embed` hoàn chỉnh (mục 6.6 bước 3–5), `W.App` trong Lua/JSON | Ma trận app chạy được, gõ tiếng Việt được trong app nhúng | ✅ (popup bằng click, clipboard, gõ trong app Qt chưa thử tay) |
+| **M6** | Tài liệu API Lua (+ file type stub cho LuaLS để có autocomplete), ví dụ plugin, kiểm tra ngân sách bộ nhớ | `docs/`, `types/` (test `docs_cover_api` giữ đồng bộ với code), plugin `sysmon`, `docs/memory.md` | ✅ |
+
+### Khoảng trống đã biết (sau M6)
+
+Ghi nhận từ các milestone, chưa xử lý:
+
+- **Brightness** chưa thử trên máy thật: `ddcutil` chưa cài, DP-2 không có backlight → service báo `available = false`, slider bị ẩn.
+- **Bar ẩn khi fullscreen** chưa thử live (logic theo `hw.service.hyprland.fullscreen` có, chưa kiểm chứng với app fullscreen thật).
+- **Launcher**: click chuột vào kết quả chưa thử (chỉ thử bàn phím); **lịch sử launcher của AGS** (`~/.config/ags/cache/launcher/…`) chưa import sang `apps.json`.
+- **hw-embed**: đường **shm** chưa thử lại từ khi gỡ `foot` (kitty/mpv/GTK đều dùng dmabuf); popup mở bằng click, clipboard, gõ tiếng Việt trong app Qt chưa thử tay.
+- **Bộ nhớ** (`docs/memory.md`): không thấy rò (phẳng sau khi ấm), nhưng demo đầy đủ dùng 73 MB anon lúc khởi động và 105–150 MB sau khi mở mọi window → vượt ngân sách < 80 MB; hướng giảm: dựng window ẩn một cách lười. Chưa chạy đủ 24h. Sau `hyprwidget reload` main loop thức ~290 lần/s (M4a, chưa sửa).
+- Lazy submenu của DBusMenu (`AboutToShow` chỉ gửi cho menu gốc); cache ảnh bìa MPRIS không bao giờ dọn; đổi theme lúc chạy không ghi vào `config.json`.
+- Kéo-thả (cửa sổ vào workspace, sắp xếp widget panel) và `Gtk.Video` chưa port.
 
 ---
 

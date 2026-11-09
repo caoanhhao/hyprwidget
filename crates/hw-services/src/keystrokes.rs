@@ -32,7 +32,7 @@ use xkbcommon::xkb;
 
 use crate::service::{Pusher, Service};
 
-const PROPS: &[&str] = &["enabled", "available", "error", "devices", "key"];
+pub const PROPS: &[&str] = &["enabled", "available", "error", "devices", "key"];
 const KEY_A: usize = 30;
 const KEY_VOLUMEUP: usize = 115;
 const EV_KEY: u16 = 1;

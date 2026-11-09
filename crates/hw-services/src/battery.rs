@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::service::{Pusher, Service};
 
-const PROPS: &[&str] = &[
+pub const PROPS: &[&str] = &[
     "available",
     "percentage",
     "state",

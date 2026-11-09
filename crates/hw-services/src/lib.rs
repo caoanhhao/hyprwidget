@@ -47,6 +47,22 @@ pub fn start(name: &str) -> Option<anyhow::Result<Rc<Service>>> {
     })
 }
 
+/// Prop names of service `name` without starting it (docs/stub checks).
+pub fn props(name: &str) -> Option<&'static [&'static str]> {
+    Some(match name {
+        "hyprland" => hyprland::PROPS,
+        "sysinfo" => sysinfo::PROPS,
+        "apps" => apps::PROPS,
+        "audio" => audio::PROPS,
+        "battery" => battery::PROPS,
+        "brightness" => brightness::PROPS,
+        "hyprsunset" => hyprsunset::PROPS,
+        "theme" => theme::PROPS,
+        "keystrokes" => keystrokes::PROPS,
+        _ => return None,
+    })
+}
+
 /// Names accepted by [`start`].
 pub const NAMES: &[&str] = &[
     "hyprland",

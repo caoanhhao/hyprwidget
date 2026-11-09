@@ -216,10 +216,22 @@ fn fill(
     flush(&mut section);
 }
 
-/// A live DBusMenu: `model` and `actions` are updated in place, so widgets
-/// keep working across layout changes.
+/// Called with the new model after each layout change; returns `false` to
+/// be dropped (its widget is gone).
+type ModelListener = Box<dyn Fn(&gio::Menu) -> bool>;
+
+/// A live DBusMenu. `actions` is updated in place; the model is replaced on
+/// every layout change and handed to [`DbusMenu::connect_model`] listeners.
+///
+/// Why not update one model in place: a `GtkPopoverMenu` adds a stack page
+/// per submenu but does not remove it when the *section* holding the
+/// submenu is removed (GTK 4.24), so every rebuild leaked the pages and
+/// warned "duplicate child name in GtkStack: Charset" (fcitx5's menu
+/// changes with the focused input method). A new model makes GTK build a
+/// new popover and free the old one.
 pub struct DbusMenu {
-    pub model: gio::Menu,
+    model: RefCell<gio::Menu>,
+    listeners: RefCell<Vec<ModelListener>>,
     pub actions: gio::SimpleActionGroup,
     pub root: RefCell<Option<MenuNode>>,
     conn: Connection,
@@ -240,7 +252,8 @@ impl Drop for DbusMenu {
 impl DbusMenu {
     pub fn new(conn: Connection, bus: &str, path: &str) -> Rc<Self> {
         let this = Rc::new(Self {
-            model: gio::Menu::new(),
+            model: RefCell::new(gio::Menu::new()),
+            listeners: RefCell::default(),
             actions: gio::SimpleActionGroup::new(),
             root: RefCell::new(None),
             conn,
@@ -346,19 +359,31 @@ impl DbusMenu {
         }
     }
 
+    /// The current menu model (replaced on layout changes).
+    pub fn model(&self) -> gio::Menu {
+        self.model.borrow().clone()
+    }
+
+    /// Calls `f` with each new model; `f` returns `false` to unsubscribe.
+    pub fn connect_model(&self, f: impl Fn(&gio::Menu) -> bool + 'static) {
+        self.listeners.borrow_mut().push(Box::new(f));
+    }
+
     fn rebuild(self: &Rc<Self>) {
         for a in self.actions.list_actions() {
             self.actions.remove_action(&a);
         }
-        self.model.remove_all();
+        let model = gio::Menu::new();
         if let Some(root) = &*self.root.borrow() {
-            fill(
-                &self.model,
-                &root.children,
-                &self.actions,
-                &Rc::downgrade(self),
-            );
+            fill(&model, &root.children, &self.actions, &Rc::downgrade(self));
         }
+        *self.model.borrow_mut() = model.clone();
+        let listeners = std::mem::take(&mut *self.listeners.borrow_mut());
+        let kept: Vec<_> = listeners.into_iter().filter(|f| f(&model)).collect();
+        // Listeners added while notifying go after the kept ones.
+        let mut cur = self.listeners.borrow_mut();
+        let added = std::mem::replace(&mut *cur, kept);
+        cur.extend(added);
     }
 
     fn click(&self, id: i32) {
