@@ -83,12 +83,12 @@ pub fn parse_image_data(v: &Value) -> Option<RawImage> {
         return None;
     }
     Some(RawImage {
-        width: v_i64(&f[0])? as i32,
-        height: v_i64(&f[1])? as i32,
-        rowstride: v_i64(&f[2])? as i32,
+        width: i32::try_from(v_i64(&f[0])?).ok()?,
+        height: i32::try_from(v_i64(&f[1])?).ok()?,
+        rowstride: i32::try_from(v_i64(&f[2])?).ok()?,
         has_alpha: v_bool(&f[3])?,
-        bits_per_sample: v_i64(&f[4])? as i32,
-        channels: v_i64(&f[5])? as i32,
+        bits_per_sample: i32::try_from(v_i64(&f[4])?).ok()?,
+        channels: i32::try_from(v_i64(&f[5])?).ok()?,
         data: v_bytes(&f[6])?,
     })
 }
@@ -107,7 +107,7 @@ pub fn parse_hints(hints: &HashMap<String, OwnedValue>) -> Hints {
     let get = |k: &str| hints.get(k).map(|v| &**v);
     let str_hint = |k: &str| get(k).and_then(v_str).filter(|s| !s.is_empty());
     let bool_hint = |k: &str| get(k).and_then(v_bool).unwrap_or(false);
-    let int_hint = |k: &str| get(k).and_then(v_i64).map(|n| n as i32);
+    let int_hint = |k: &str| get(k).and_then(v_i64).and_then(|n| i32::try_from(n).ok());
 
     // Priority (spec 1.2 "Icons and Images"): image-data > image-path >
     // (app_icon, handled by the caller) > icon_data. Older spellings too.
@@ -295,5 +295,23 @@ mod tests {
                 ("reply".into(), "Reply".into())
             ]
         );
+    }
+
+    #[test]
+    fn out_of_range_image_data_rejected() {
+        let s = StructureBuilder::new()
+            .add_field(1i64 << 32)
+            .add_field(1i32)
+            .add_field(4i32)
+            .add_field(true)
+            .add_field(8i32)
+            .add_field(4i32)
+            .add_field(vec![7u8; 4])
+            .build()
+            .unwrap();
+        assert_eq!(parse_image_data(&Value::Structure(s)), None);
+        let mut m = HashMap::new();
+        m.insert("x".into(), ov(Value::I64(1 << 32)));
+        assert_eq!(parse_hints(&m).x, None);
     }
 }
