@@ -66,6 +66,8 @@ pub struct Core {
     pub services: crate::service::Services,
     /// Generated SCSS partials from `hw.scss(name, text)`.
     pub scss_partials: RefCell<std::collections::BTreeMap<String, String>>,
+    /// Selected theme and its colors (`hw.theme`).
+    pub theme: crate::theme::Theme,
 }
 
 impl Core {
@@ -91,6 +93,7 @@ impl Core {
             extra_rules: RefCell::default(),
             services: Default::default(),
             scss_partials: Default::default(),
+            theme: Default::default(),
         }))
     }
 
@@ -303,6 +306,10 @@ impl Runtime {
     pub fn load(&self) -> anyhow::Result<()> {
         let entry = self.st.core.dir.entry();
         let res = (|| -> Result<()> {
+            // Theme first (plugin styles use its colors), then plugins so
+            // their widgets exist for the config.
+            crate::theme::load(&self.lua)?;
+            crate::plugin::load_all(&self.lua)?;
             let chunk = self
                 .lua
                 .load(std::fs::read_to_string(&entry).map_err(mlua::Error::external)?)
@@ -529,6 +536,22 @@ fn sync_monitors(lua: &Lua) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Destroys and rebuilds the `per_monitor` windows (after a plugin was
+/// reloaded) without re-running the config.
+pub fn rebuild_monitor_windows(lua: &Lua) -> Result<()> {
+    let st = RtState::get(lua)?;
+    let Some(ui) = &st.core.ui else {
+        return Ok(());
+    };
+    let old: Vec<MonitorWindows> = st.pm_windows.borrow_mut().drain().map(|(_, v)| v).collect();
+    for (_, names) in old {
+        for n in names {
+            ui.windows.remove(&n);
+        }
+    }
+    sync_monitors(lua)
 }
 
 fn collect_windows(lua: &Lua, v: Value, names: &mut Vec<String>) -> Result<()> {
@@ -1205,6 +1228,8 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     g.set("require_custom_dir", require_custom_dir)?;
 
     crate::dbus_services::install(lua, &hw)?;
+    crate::theme::install(lua, &hw)?;
+    crate::plugin::install(lua, &hw)?;
 
     let loaded: Table = package.get("loaded")?;
     loaded.set("hw", hw.clone())?;

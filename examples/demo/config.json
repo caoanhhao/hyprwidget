@@ -1,3 +1,9 @@
 {
-  "settings_file": "cache/settings/settings.json"
+  "settings_file": "cache/settings/settings.json",
+  "plugins": {
+    "enabled": [
+      "sysmon"
+    ]
+  },
+  "theme": null
 }

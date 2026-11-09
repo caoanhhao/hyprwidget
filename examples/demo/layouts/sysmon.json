@@ -1,0 +1,16 @@
+{
+  "type": "Box",
+  "class": "sysmon-panel",
+  "spacing": 12,
+  "children": [
+    { "type": "Sysmon", "items": ["cpu", "mem", "gpu"] },
+    {
+      "type": "Terminal",
+      "class": "sysmon-terminal",
+      "command": ["btop"],
+      "font": "JetBrainsMono Nerd Font 10",
+      "size": { "cols": 110, "rows": 30 },
+      "restart": "on-exit"
+    }
+  ]
+}

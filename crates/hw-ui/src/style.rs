@@ -35,6 +35,22 @@ pub fn compile_str(scss: &str, load_paths: &[&Path]) -> Result<String> {
     grass::from_string(scss.to_owned(), &opts).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
+/// Compiles an extra stylesheet (a plugin's `style.scss`): `hypr` and
+/// `hw-theme` from `gen_dir` are imported first, the file's own directory
+/// is searched for `@import`.
+pub fn compile_extra(entry: &Path, gen_dir: &Path) -> Result<String> {
+    let text =
+        std::fs::read_to_string(entry).with_context(|| format!("reading {}", entry.display()))?;
+    let dir = entry.parent().unwrap_or(Path::new("."));
+    // Same line, so error line numbers match the file.
+    let src = format!("@import \"hypr\"; @import \"hw-theme\"; {text}");
+    let opts = grass::Options::default().load_paths(&[dir, gen_dir]);
+    grass::from_string(src, &opts).map_err(|e| anyhow::anyhow!("{}: {e}", entry.display()))
+}
+
+/// Called with `(key, message)` when an extra stylesheet fails to compile.
+pub type ExtraErrorHook = Rc<dyn Fn(&str, &str)>;
+
 /// Writes `<dir>/_<name>.scss` unless it already has this content.
 pub fn write_partial(dir: &Path, name: &str, scss: &str) -> Result<bool> {
     let path = dir.join(format!("_{name}.scss"));
@@ -58,6 +74,9 @@ pub struct Styles {
     inline: gtk4::CssProvider,
     inline_rules: RefCell<BTreeMap<u64, String>>,
     next_inline: Cell<u64>,
+    /// Extra stylesheets compiled before the user's (plugins), by key.
+    extras: RefCell<BTreeMap<String, PathBuf>>,
+    extra_error: RefCell<Option<ExtraErrorHook>>,
 }
 
 impl Styles {
@@ -85,6 +104,8 @@ impl Styles {
             entry: RefCell::new(entry),
             inline_rules: RefCell::new(BTreeMap::new()),
             next_inline: Cell::new(0),
+            extras: RefCell::default(),
+            extra_error: RefCell::default(),
         }))
     }
 
@@ -120,11 +141,47 @@ impl Styles {
         write_partial(&self.gen_dir, name, scss)
     }
 
-    /// Recompiles the user's stylesheet. On error the previous CSS stays.
+    /// Adds (`Some`) or removes an extra stylesheet; takes effect on the
+    /// next [`Self::reload_user`].
+    pub fn set_extra(&self, key: &str, entry: Option<PathBuf>) {
+        match entry {
+            Some(p) => self.extras.borrow_mut().insert(key.to_owned(), p),
+            None => self.extras.borrow_mut().remove(key),
+        };
+    }
+
+    pub fn set_extra_error_hook(&self, f: ExtraErrorHook) {
+        *self.extra_error.borrow_mut() = Some(f);
+    }
+
+    /// Path of the generated partials (`_hypr.scss`, `_hw-theme.scss`…).
+    pub fn gen_dir(&self) -> &Path {
+        &self.gen_dir
+    }
+
+    /// Recompiles the user's stylesheet (after the extra ones). On error the
+    /// previous CSS stays; a broken extra stylesheet is only skipped.
     pub fn reload_user(&self) -> Result<()> {
         let entry = self.entry.borrow().clone();
         let style_dir = self.style_dir();
-        let css = compile_file(&entry, &[&style_dir, &self.gen_dir])?;
+        let mut css = String::new();
+        let extras = self.extras.borrow().clone();
+        for (key, path) in extras {
+            match compile_extra(&path, &self.gen_dir) {
+                Ok(c) => {
+                    css.push_str(&c);
+                    css.push('\n');
+                }
+                Err(e) => {
+                    tracing::error!("{key} stylesheet: {e:#}");
+                    let hook = self.extra_error.borrow().clone();
+                    if let Some(h) = hook {
+                        h(&key, &format!("{e:#}"));
+                    }
+                }
+            }
+        }
+        css.push_str(&compile_file(&entry, &[&style_dir, &self.gen_dir])?);
         self.user.load_from_string(&css);
         tracing::info!(file = %entry.display(), "stylesheet loaded");
         Ok(())

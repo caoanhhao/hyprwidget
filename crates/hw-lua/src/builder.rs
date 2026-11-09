@@ -361,6 +361,11 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
         Kind::Window if !has("margin") => {
             bind_option(lua, w, kind, "margin", "general:gaps_out", &keep)?
         }
+        // Terminal colors follow the theme (`hw.theme.colors`).
+        Kind::Terminal if !has("colors") => {
+            let sig = lua.create_userdata(LuaSignal::json(st.core.theme.colors.clone(), None))?;
+            bind_prop(w, kind, "colors", &Value::UserData(sig), &keep)?
+        }
         _ => {}
     }
 

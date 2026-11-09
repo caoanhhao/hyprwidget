@@ -6,6 +6,7 @@
 
 pub mod monitors;
 pub mod style;
+pub mod terminal;
 pub mod watch;
 pub mod widgets;
 pub mod windows;

@@ -3,9 +3,12 @@
 //  - "theme": settings.json ui.* ($OPACITY, $FONT-SIZE, $SCALE) and the
 //             wallpaper palette from ~/.cache/cwal (config/theme.lua);
 //             defaultColors.scss is the fallback palette.
+//  - "hw-theme": the theme selected in config.json / `hyprwidget theme`
+//             (themes/<name>), overriding the palette; empty without one.
 @import "hypr";
 @import "defaultColors.scss";
 @import "theme";
+@import "hw-theme";
 @import "constants.scss";
 @import "colors.scss";
 
