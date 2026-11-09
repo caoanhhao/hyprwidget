@@ -154,13 +154,22 @@ pub(crate) fn spawn(
 
 /// Sends `sig` to the app's process group (falls back to the pid).
 pub(crate) fn signal(pid: u32, sig: i32) {
-    let pid = pid as libc::pid_t;
-    // SAFETY: plain kill(2).
+    let Some(pid) = target_pid(pid) else {
+        tracing::warn!(pid, "refusing to signal invalid pid");
+        return;
+    };
+    // SAFETY: plain kill(2); `pid > 0`, so neither call targets our own group.
     unsafe {
         if libc::kill(-pid, sig) == -1 {
             libc::kill(pid, sig);
         }
     }
+}
+
+/// `pid` as a positive `pid_t`; 0 and out-of-range values would make
+/// `kill(-pid)` hit our own process group or every process.
+fn target_pid(pid: u32) -> Option<libc::pid_t> {
+    libc::pid_t::try_from(pid).ok().filter(|&p| p > 0)
 }
 
 /// Exit code from a wait status (128 + signal for killed processes).
@@ -181,5 +190,13 @@ mod tests {
         assert_eq!(super::exit_code(0), 0);
         assert_eq!(super::exit_code(3 << 8), 3);
         assert_eq!(super::exit_code(libc::SIGTERM), 128 + libc::SIGTERM);
+    }
+
+    #[test]
+    fn target_pids() {
+        assert_eq!(super::target_pid(0), None);
+        assert_eq!(super::target_pid(u32::MAX), None);
+        assert_eq!(super::target_pid(1 << 31), None);
+        assert_eq!(super::target_pid(42), Some(42));
     }
 }

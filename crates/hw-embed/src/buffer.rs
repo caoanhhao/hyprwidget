@@ -155,10 +155,14 @@ fn shm_texture(
             ShmFormat::Xbgr8888 => gdk::MemoryFormat::R8g8b8x8,
             other => anyhow::bail!("unsupported shm format {other:?}"),
         };
-        let start = data.offset as usize;
-        let size = data.stride as usize * data.height as usize;
-        anyhow::ensure!(start + size <= len, "shm buffer out of bounds");
-        // SAFETY: smithay mapped `len` bytes at `ptr`; range checked above.
+        let start = usize::try_from(data.offset)?;
+        let size = usize::try_from(data.stride)?.checked_mul(usize::try_from(data.height)?);
+        let size = size.filter(|&size| start.checked_add(size).is_some_and(|end| end <= len));
+        let Some(size) = size else {
+            anyhow::bail!("shm buffer out of bounds");
+        };
+        // SAFETY: smithay mapped `len` bytes at `ptr`; `start + size <= len`
+        // checked above without overflow.
         let bytes = unsafe { std::slice::from_raw_parts(ptr.add(start), size) };
         let mut builder = gdk::MemoryTextureBuilder::new()
             .set_bytes(Some(&glib::Bytes::from(bytes)))
