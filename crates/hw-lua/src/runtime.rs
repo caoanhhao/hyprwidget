@@ -847,6 +847,11 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     )?;
 
     // Timers
+    // hw.now() -> monotonic seconds (float), for durations / frame timing.
+    hw.set(
+        "now",
+        lua.create_function(|_, ()| Ok(glib::monotonic_time() as f64 / 1e6))?,
+    )?;
     hw.set(
         "timeout",
         lua.create_function(|lua, (ms, f): (u64, Function)| {
