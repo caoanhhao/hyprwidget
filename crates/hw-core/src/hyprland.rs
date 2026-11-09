@@ -89,7 +89,7 @@ pub fn eval(code: &str) -> Result<String> {
 }
 
 /// Spawns a thread reading `.socket2.sock`; each `event>>data` line is
-/// delivered to `on_event` on the calling thread's GLib main context.
+/// delivered to `on_event` on the calling thread's `GLib` main context.
 /// Reconnects if Hyprland restarts.
 pub fn listen_events(on_event: impl Fn(&str, &str) + 'static) -> Result<()> {
     let path = socket_dir()
@@ -125,6 +125,10 @@ pub fn listen_events(on_event: impl Fn(&str, &str) + 'static) -> Result<()> {
 
 /// Lua for Hyprland's `hl.layer_rule` making a namespace blurred the way
 /// `decoration:blur:*` says (PLAN.md §3.6).
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "pub API used by other workspace crates"
+)]
 pub fn blur_rules(namespace: &str, popups: bool, ignore_alpha: Option<f64>) -> Vec<String> {
     let ns = format!("^({})$", namespace.replace('"', ""));
     let mut rules = vec![format!(

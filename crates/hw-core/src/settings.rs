@@ -20,6 +20,7 @@ use crate::reactive::{Signal, remove_source};
 /// Delay between the last `set` and the write to disk.
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
+#[derive(Debug)]
 pub struct Settings {
     path: PathBuf,
     data: RefCell<Value>,
@@ -60,6 +61,18 @@ fn as_object(v: &mut Value) -> &mut Map<String, Value> {
     }
 }
 
+/// `x` as an `i64` if it is an integral value in range.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    reason = "range-checked before the cast; the i64 bounds are exact powers of two"
+)]
+fn round_to_i64(x: f64) -> Option<i64> {
+    // `i64::MAX as f64` rounds up to 2^63, hence the strict bound.
+    (x >= i64::MIN as f64 && x < i64::MAX as f64).then_some(x as i64)
+}
+
 /// Checks `value` against an `AGSSetting`'s `type`/`min`/`max`; numbers are
 /// clamped.
 pub fn validate(meta: &Value, value: Value) -> Result<Value> {
@@ -71,10 +84,9 @@ pub fn validate(meta: &Value, value: Value) -> Result<Value> {
     }
     let clamp = |x: f64| x.clamp(lo, hi);
     Ok(match ty {
-        "int" => match value.as_f64().map(|x| clamp(x.round())) {
-            // `i64::MAX as f64` rounds up to 2^63, hence the strict bound.
-            Some(x) if x >= i64::MIN as f64 && x < i64::MAX as f64 => json!(x as i64),
-            _ => bail!("expected int, got {value}"),
+        "int" => match value.as_f64().and_then(|x| round_to_i64(clamp(x.round()))) {
+            Some(x) => json!(x),
+            None => bail!("expected int, got {value}"),
         },
         "float" => match value.as_f64() {
             Some(x) => json!(clamp(x)),
@@ -103,7 +115,7 @@ impl Settings {
             data: RefCell::new(data),
             signals: RefCell::new(HashMap::new()),
             pending: RefCell::new(None),
-            this: this.clone(),
+            this: Weak::clone(this),
         }))
     }
 
@@ -113,9 +125,7 @@ impl Settings {
 
     /// Value at `key` (`Null` if missing).
     pub fn get(&self, key: &str) -> Value {
-        node(&self.data.borrow(), key)
-            .map(unwrap_setting)
-            .unwrap_or(Value::Null)
+        node(&self.data.borrow(), key).map_or(Value::Null, unwrap_setting)
     }
 
     /// The `AGSSetting` object at `key`, if the leaf is one.
@@ -189,7 +199,7 @@ impl Settings {
         if self.pending.borrow().is_some() {
             return;
         }
-        let this = self.this.clone();
+        let this = Weak::clone(&self.this);
         let id = glib::timeout_add_local_once(SAVE_DEBOUNCE, move || {
             if let Some(s) = this.upgrade() {
                 s.pending.borrow_mut().take();

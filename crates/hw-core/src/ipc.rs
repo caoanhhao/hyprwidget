@@ -80,6 +80,7 @@ pub fn send_to(path: &Path, req: &Request) -> Result<Response> {
 
 /// Answers one request; may be called later (async handlers). Dropping it
 /// unanswered sends an error.
+#[derive(Debug)]
 pub struct Reply(Option<async_channel::Sender<Response>>);
 
 impl Reply {
@@ -99,19 +100,22 @@ impl Drop for Reply {
 }
 
 /// Listening socket; removes the socket file when dropped.
+#[derive(Debug)]
 pub struct Server {
     path: PathBuf,
 }
 
 impl Server {
     /// Binds the socket and dispatches requests to `handler` on the calling
-    /// thread's GLib main context.
+    /// thread's `GLib` main context.
     pub fn start(instance: &str, handler: impl Fn(Request, Reply) + 'static) -> Result<Self> {
         Self::start_at(socket_path(instance)?, handler)
     }
 
     /// Like [`Server::start`] with an explicit socket path.
     pub fn start_at(path: PathBuf, handler: impl Fn(Request, Reply) + 'static) -> Result<Self> {
+        type Job = (Request, async_channel::Sender<Response>);
+
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -124,7 +128,6 @@ impl Server {
         let listener =
             UnixListener::bind(&path).with_context(|| format!("binding {}", path.display()))?;
 
-        type Job = (Request, async_channel::Sender<Response>);
         let (tx, rx) = async_channel::unbounded::<Job>();
         std::thread::Builder::new()
             .name("hw-ipc".into())
@@ -133,7 +136,7 @@ impl Server {
                     let Ok(conn) = conn else { continue };
                     let jobs = tx.clone();
                     std::thread::spawn(move || {
-                        if let Err(e) = serve(conn, &jobs) {
+                        if let Err(e) = serve(&conn, &jobs) {
                             tracing::debug!("ipc connection: {e:#}");
                         }
                     });
@@ -159,12 +162,12 @@ impl Server {
 }
 
 fn serve(
-    conn: UnixStream,
+    conn: &UnixStream,
     jobs: &async_channel::Sender<(Request, async_channel::Sender<Response>)>,
 ) -> Result<()> {
     conn.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut line = String::new();
-    BufReader::new(&conn).read_line(&mut line)?;
+    BufReader::new(conn).read_line(&mut line)?;
     let resp = match serde_json::from_str::<Request>(&line) {
         Ok(req) => {
             let (tx, rx) = async_channel::bounded(1);
@@ -176,7 +179,7 @@ fn serve(
     };
     let mut out = serde_json::to_string(&resp)?;
     out.push('\n');
-    (&conn).write_all(out.as_bytes())?;
+    { conn }.write_all(out.as_bytes())?;
     Ok(())
 }
 
