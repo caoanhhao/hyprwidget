@@ -42,8 +42,8 @@ Dev harness: `cargo run -p hw-embed --example embed-test -- <cmd>` (env:
 
 | App | Installed | Mode | Result |
 |---|---|---|---|
-| foot | **no** (was installed for M0.5, now absent) | – | not tested; kitty used instead |
-| kitty 0.49.2 (terminal, GL) | yes | `WAYLAND_SOCKET` | renders, title/app_id reported |
+| foot | **no** (uninstalled by the user, who uses kitty) | – | not tested; kitty is the harness default |
+| kitty 0.49.2 (terminal, EGL → dmabuf) | yes | `WAYLAND_SOCKET` | renders, title/app_id reported. EGL client, so it does not exercise the shm path |
 | pavucontrol 6.2 (GTK4) | yes | `WAYLAND_SOCKET` | renders, no headerbar (maximized/tiled), demo panel works incl. keep_alive stop/restart |
 | zenity 4 (GTK4/libadwaita) | yes | `WAYLAND_SOCKET` | renders; **Vietnamese typing works** (see below) |
 | nautilus 51 (GTK4) | yes | `dbus-run-session nautilus` | renders (own CSD buttons). Plain `nautilus` would open in the user's running instance via D-Bus — single-instance limit, see below |
