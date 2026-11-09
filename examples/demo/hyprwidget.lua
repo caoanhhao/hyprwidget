@@ -11,6 +11,11 @@ require_all({
   "launcher",
   "sysmon",
   "embed",
+  "settings_widget",
+  "userpanel",
+  "wallpaper",
+  "always_on",
+  "keystrokes",
 })
 
 require_custom_dir()

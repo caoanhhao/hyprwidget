@@ -6,6 +6,7 @@ mod app_widget;
 pub mod builder;
 pub mod cairo;
 pub mod convert;
+pub mod custom;
 pub mod dbus_services;
 pub mod monitor;
 pub mod plugin;

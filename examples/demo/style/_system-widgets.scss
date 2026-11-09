@@ -1,0 +1,58 @@
+// UserPanel, WallpaperSwitcher, SettingsWidget, AlwaysOnWidget,
+// KeyStrokeVisualizer and the night-light slider: what differs from the AGS
+// partials copied in widgets/ and panel/ (which stay as they were). Uses the
+// base variables ($background…, which follow the wallpaper palette).
+
+// Full-screen user panel: dim the desktop like AGS' window background.
+window.user-panel {
+  background-color: rgba(0, 0, 0, 0.2);
+}
+
+.user-panel .user-profile .main {
+  padding: 15px;
+
+  .user-name {
+    font-weight: bold;
+    font-size: 1.2em;
+  }
+
+  .uptime {
+    opacity: 0.7;
+  }
+}
+
+// AGS Picture → a Box with a background image.
+.wallpaper-switcher {
+  .image .wallpaper {
+    border-radius: 10px;
+  }
+
+  .actions .color-scheme .color {
+    font-size: 1.2em;
+  }
+
+  .progress-widget {
+    @include button;
+
+    &.error {
+      color: $red;
+    }
+  }
+}
+
+.settings .setting .setting-value {
+  min-width: 3em;
+}
+
+// Night light icon in the control panel is a button.
+.control-panel-slider > button.icon {
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  min-width: 0;
+  min-height: 0;
+}
+
+window.keystroke-visualizer {
+  background-color: transparent;
+}

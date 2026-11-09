@@ -164,7 +164,7 @@ type MonitorWindows = (gtk4::gdk::Monitor, Vec<String>);
 /// Per-Lua-state data, reachable from Lua callbacks through app data.
 pub struct RtState {
     pub core: Rc<Core>,
-    user_opts: RefCell<serde_json::Value>,
+    pub(crate) user_opts: RefCell<serde_json::Value>,
     resolvers: RefCell<Vec<(Vec<String>, Function)>>,
     /// `file:line: message` found while loading (`hyprwidget check`).
     pub diagnostics: RefCell<Vec<String>>,
@@ -348,33 +348,7 @@ impl Runtime {
     /// Pushes the user option layer (config.json, then `hw.config` calls)
     /// into the option store.
     pub fn apply_options(&self) -> Result<()> {
-        let st = &self.st;
-        let json_opts = st.core.app_cfg.borrow().options.clone();
-        let mut user = normalize_tree(
-            &json_opts,
-            &mut Vec::new(),
-            "config.json",
-            &mut st.diagnostics.borrow_mut(),
-        );
-        options::deep_merge(&mut user, &st.user_opts.borrow());
-        let weak = self.lua.weak();
-        let resolvers = st
-            .resolvers
-            .borrow()
-            .iter()
-            .map(|(path, f)| {
-                let (weak, f) = (weak.clone(), f.clone());
-                let r: options::Resolver = Box::new(move |base| {
-                    let lua = weak.try_upgrade()?;
-                    let h = json_to_lua(&lua, base).ok()?;
-                    let v = call_value(&weak, &f, h);
-                    lua_to_json(&lua, v).ok().filter(|v| !v.is_null())
-                });
-                (path.clone(), r)
-            })
-            .collect();
-        st.core.options.set_user(user, resolvers);
-        Ok(())
+        apply_options(&self.lua, &self.st)
     }
 
     fn start_per_monitor(&self) -> Result<()> {
@@ -461,6 +435,61 @@ impl Drop for Runtime {
         }
         self.st.core.extra_rules.borrow_mut().clear();
     }
+}
+
+/// Pushes the user option layer (config.json, then `hw.config` calls) into
+/// the option store.
+pub(crate) fn apply_options(lua: &Lua, st: &RtState) -> Result<()> {
+    let json_opts = st.core.app_cfg.borrow().options.clone();
+    let mut user = normalize_tree(
+        &json_opts,
+        &mut Vec::new(),
+        "config.json",
+        &mut st.diagnostics.borrow_mut(),
+    );
+    options::deep_merge(&mut user, &st.user_opts.borrow());
+    let weak = lua.weak();
+    let resolvers = st
+        .resolvers
+        .borrow()
+        .iter()
+        .map(|(path, f)| {
+            let (weak, f) = (weak.clone(), f.clone());
+            let r: options::Resolver = Box::new(move |base| {
+                let lua = weak.try_upgrade()?;
+                let h = json_to_lua(&lua, base).ok()?;
+                let v = call_value(&weak, &f, h);
+                lua_to_json(&lua, v).ok().filter(|v| !v.is_null())
+            });
+            (path.clone(), r)
+        })
+        .collect();
+    st.core.options.set_user(user, resolvers);
+    Ok(())
+}
+
+/// Stores and writes the generated partial `_<name>.scss`, recompiling the
+/// stylesheet when it changed (after loading).
+pub(crate) fn set_partial(lua: &Lua, name: &str, text: &str) -> Result<()> {
+    let st = RtState::get(lua)?;
+    st.core
+        .scss_partials
+        .borrow_mut()
+        .insert(name.to_owned(), text.to_owned());
+    if let Some(ui) = &st.core.ui {
+        let changed = ui
+            .styles
+            .write_partial(name, text)
+            .map_err(|e| mlua::Error::runtime(format!("{e:#}")))?;
+        // While loading, the stylesheet is compiled right after.
+        if changed
+            && !st.loading.get()
+            && let Err(e) = ui.styles.reload_user()
+        {
+            tracing::error!("stylesheet: {e:#}");
+        }
+    }
+    Ok(())
 }
 
 /// Normalizes known options of a JSON tree (colors → CSS…), recording
@@ -1002,6 +1031,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     )?;
     hw.set("json", json)?;
     hw.set("config", lua.create_function(hw_config)?)?;
+    crate::custom::install(lua, &hw)?;
     hw.set(
         "layer_rule",
         lua.create_function(|lua, t: Table| {
@@ -1034,25 +1064,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
                     "hw.scss: invalid partial name '{name}'"
                 )));
             }
-            let st = RtState::get(lua)?;
-            st.core
-                .scss_partials
-                .borrow_mut()
-                .insert(name.clone(), text.clone());
-            if let Some(ui) = &st.core.ui {
-                let changed = ui
-                    .styles
-                    .write_partial(&name, &text)
-                    .map_err(|e| mlua::Error::runtime(format!("{e:#}")))?;
-                // While loading, the stylesheet is compiled right after.
-                if changed
-                    && !st.loading.get()
-                    && let Err(e) = ui.styles.reload_user()
-                {
-                    tracing::error!("stylesheet: {e:#}");
-                }
-            }
-            Ok(())
+            set_partial(lua, &name, &text)
         })?,
     )?;
     hw.set(
@@ -1096,6 +1108,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     };
     hw.set("monitors", monitors)?;
     crate::service::install(lua, &hw)?;
+    crate::service::install_theme(lua, &hw)?;
     hw.set(
         "per_monitor",
         lua.create_function(|lua, f: Function| {

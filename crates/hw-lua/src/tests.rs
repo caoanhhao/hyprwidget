@@ -245,3 +245,47 @@ fn json_helpers() {
     assert_eq!(out, r#"x3nil{"k":"v"}"#);
     assert!(rt.eval("hw.json.decode('{')").is_err());
 }
+
+#[test]
+fn set_option_writes_widget_custom_file() {
+    let dir = config_dir("set-option", &[("hyprwidget.lua", "require_custom_dir()")]);
+    let root = dir.root.clone();
+    let (core, rt) = load(dir.clone(), None);
+    let out = rt
+        .eval(r#"hw.set_option("decoration:rounding", 7, "widget")"#)
+        .unwrap();
+    assert_eq!(out, "widget");
+    assert_eq!(core.options.get("decoration:rounding"), json!(7));
+    assert_eq!(
+        std::fs::read_to_string(root.join("config/custom/decoration:rounding.lua")).unwrap(),
+        "hw.config({ decoration = { rounding = 7 } })\n"
+    );
+    assert!(rt.eval(r#"hw.set_option("../x", 1, "widget")"#).is_err());
+    assert!(rt.eval(r#"hw.set_option("a:b", 1, "nope")"#).is_err());
+    // The file is picked up by require_custom_dir() on the next load.
+    drop(rt);
+    let (core, _rt) = load(dir, None);
+    assert_eq!(core.options.get("decoration:rounding"), json!(7));
+}
+
+#[test]
+fn theme_palette_and_partial() {
+    let dir = config_dir("theme", &[("hyprwidget.lua", "")]);
+    let (core, rt) = load(dir, None);
+    let out = rt
+        .eval(
+            r##"(function()
+                hw.theme:set_source("#cc3333", "light")
+                local c = hw.theme.colors()
+                return hw.theme.mode() .. " " .. tostring(c.primary:match("^#%x+$") ~= nil)
+            end)()"##,
+        )
+        .unwrap();
+    assert_eq!(out, "light true");
+    let partials = core.scss_partials.borrow();
+    let m = partials.get("material").unwrap();
+    assert!(
+        m.contains("$md-mode: light;") && m.contains("$md-source: #cc3333;"),
+        "{m}"
+    );
+}

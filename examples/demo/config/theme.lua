@@ -1,8 +1,17 @@
 -- Generates the "theme" SCSS partial (style/main.scss imports it), the
 -- counterpart of AGS' utils/scss.ts: $OPACITY / $FONT-SIZE / $SCALE from
--- settings.json `ui.*`, then the wallpaper palette written by cwal, which
--- overrides style/defaultColors.scss. Rebuilt when either changes.
+-- settings.json `ui.*`, then the wallpaper palette, which overrides
+-- style/defaultColors.scss. Rebuilt when any of them changes.
+--
+-- Palette (widget option `theme:palette`, set it in config/custom/):
+--   "material" (default): computed by hyprwidget from the current wallpaper
+--     (hw.theme, material-colors), mapped onto the cwal names the AGS styles
+--     use ($background, $foreground, $color0..15). $md-* are available too.
+--   "cwal": ~/.cache/cwal/colors.scss written by hypr's wal-theme.sh, as AGS.
 local cwal = HOME .. "/.cache/cwal/colors.scss"
+-- Written by hypr's wallpaper daemon whenever the shown wallpaper changes.
+local current = HOME .. "/.config/hypr/wallpaper-daemon/config/current.conf"
+local system_theme = HOME .. "/.config/hypr/theme/scripts/system-theme.sh"
 
 local function read(path)
   local f = io.open(path, "r")
@@ -14,11 +23,45 @@ local function read(path)
   return text
 end
 
+-- Material roles standing in for pywal's 16 colors.
+local MATERIAL = [[
+@import "material";
+$wallpaper: "%s";
+$background: $md-surface;
+$foreground: $md-on-surface;
+$cursor: $md-on-surface;
+$color0: $md-surface;
+$color1: $md-primary;
+$color2: $md-secondary;
+$color3: $md-tertiary;
+$color4: $md-primary-container;
+$color5: $md-secondary-container;
+$color6: $md-tertiary-container;
+$color7: $md-on-surface-variant;
+$color8: $md-outline;
+$color9: $md-primary-fixed-dim;
+$color10: $md-secondary-fixed-dim;
+$color11: $md-tertiary-fixed-dim;
+$color12: $md-inverse-primary;
+$color13: $md-on-primary-container;
+$color14: $md-on-tertiary-container;
+$color15: $md-on-surface;
+]]
+
 local opacity = hw.settings["ui.opacity"]
 local font_size = hw.settings["ui.fontSize"]
 local scale = hw.settings["ui.scale"]
+local palette = hw.option("theme:palette")
+local variants = hw.settings["dynamicThemeVariants"]
 
 local function regen()
+  local colors
+  if palette:peek() == "cwal" then
+    colors = read(cwal) or ""
+  else
+    local wp = (hw.theme.wallpaper:peek() or ""):gsub('"', '\\"')
+    colors = string.format(MATERIAL, wp)
+  end
   hw.scss(
     "theme",
     string.format(
@@ -26,13 +69,38 @@ local function regen()
       tostring(opacity:peek() or 0.5),
       math.floor(font_size:peek() or 12),
       math.floor(scale:peek() or 10),
-      read(cwal) or ""
+      colors
     )
   )
 end
 
+-- Light/dark: from the wallpaper's brightness (AGS dynamicThemeVariants,
+-- like hypr's detect_variant_from_wallpaper), else the system theme.
+local function update_wallpaper()
+  local path = (read(current) or ""):gsub("%s+$", ""):gsub("^%$HOME", HOME)
+  if path == "" then
+    return
+  end
+  if variants:peek() ~= false then
+    hw.theme:set_wallpaper(path, "auto")
+  else
+    hw.exec_async({ "bash", "-c", system_theme .. " get" }, function(out)
+      hw.theme:set_wallpaper(path, (out or ""):find("light") and "light" or "dark")
+    end)
+  end
+end
+
 regen()
+update_wallpaper()
 opacity:subscribe(regen)
 font_size:subscribe(regen)
 scale:subscribe(regen)
-hw.watch_file(cwal, regen)
+palette:subscribe(regen)
+hw.theme.wallpaper:subscribe(regen)
+variants:subscribe(update_wallpaper)
+hw.watch_file(cwal, function()
+  if palette:peek() == "cwal" then
+    regen()
+  end
+end)
+hw.watch_file(current, update_wallpaper)
