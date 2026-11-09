@@ -359,7 +359,7 @@ pub fn set_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<()
         "visible" if kind == Kind::Window => {
             let win = w.downcast_ref::<gtk4::Window>().unwrap();
             if v.truthy() {
-                win.present()
+                crate::windows::present(win)
             } else {
                 win.set_visible(false)
             }

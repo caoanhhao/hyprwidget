@@ -135,7 +135,7 @@ impl UserData for LuaWindow {
 
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
         m.add_method("show", |_, w, ()| {
-            w.0.present();
+            hw_ui::windows::present(&w.0);
             Ok(())
         });
         m.add_method("hide", |_, w, ()| {
@@ -145,7 +145,7 @@ impl UserData for LuaWindow {
         m.add_method("toggle", |_, w, ()| {
             let show = !w.0.is_visible();
             if show {
-                w.0.present()
+                hw_ui::windows::present(&w.0)
             } else {
                 w.0.set_visible(false)
             }
@@ -404,7 +404,31 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
         }
     }
 
+    // A window that starts hidden builds its content when first shown.
+    let hidden = kind == Kind::Window
+        && match &visible {
+            Some(Value::Boolean(false)) => true,
+            Some(v) => as_signal(v).is_some_and(|s| !peek_prop(&s).truthy()),
+            None => false,
+        };
     for (slot, v) in slots {
+        if hidden && slot == "child" {
+            let weak = lua.weak();
+            let keep = keep.clone();
+            hw_ui::windows::defer_content(w.downcast_ref().unwrap(), move |win| {
+                let Some(lua) = weak.try_upgrade() else {
+                    return;
+                };
+                // May run inside a signal notification (`visible` turning true).
+                let res = hw_core::reactive::untracked(|| {
+                    bind_slot(&lua, win.upcast_ref(), kind, "child", v, &keep)
+                });
+                if let Err(e) = res {
+                    log_lua_error(&lua, &format!("window '{}'", win.widget_name()), &e);
+                }
+            });
+            continue;
+        }
         bind_slot(lua, w, kind, &slot, v, &keep)?;
     }
     if let Some(v) = popover {

@@ -43,7 +43,7 @@ impl Windows {
         let w = self.get(name)?;
         let show = !w.is_visible();
         if show {
-            w.present()
+            present(&w)
         } else {
             w.set_visible(false)
         }
@@ -70,4 +70,38 @@ impl Windows {
             w.destroy();
         }
     }
+}
+
+/// Content builder of a hidden window, run when it is first shown.
+type Deferred = Box<dyn FnOnce(&gtk4::Window)>;
+const DEFERRED: &str = "hw-deferred-content";
+
+/// Defers building `w`'s content until it is first shown through
+/// [`present`] (or, as a fallback, GTK's `show`). Saves building and
+/// styling the widget trees of windows that start hidden.
+pub fn defer_content(w: &gtk4::Window, build: impl FnOnce(&gtk4::Window) + 'static) {
+    // SAFETY: the key is only ever used with `Deferred`.
+    unsafe { w.set_data::<Deferred>(DEFERRED, Box::new(build)) };
+    w.connect_show(build_deferred);
+    // Drop the builder (and what it captures) with a never-shown window.
+    w.connect_destroy(|w| drop(take_deferred(w)));
+}
+
+fn take_deferred(w: &gtk4::Window) -> Option<Deferred> {
+    // SAFETY: as in `defer_content`.
+    unsafe { w.steal_data::<Deferred>(DEFERRED) }
+}
+
+/// Runs the deferred content builder of `w`, if any.
+pub fn build_deferred(w: &gtk4::Window) {
+    if let Some(build) = take_deferred(w) {
+        build(w);
+    }
+}
+
+/// `present()` after building deferred content, so a layer surface is
+/// first mapped with its final size.
+pub fn present(w: &gtk4::Window) {
+    build_deferred(w);
+    w.present();
 }
