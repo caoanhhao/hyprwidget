@@ -2,6 +2,11 @@
 
 Spike for `PLAN.md` §6.6 steps 1–2, measured 2026-11-09.
 
+The user's terminal is **kitty**; foot was installed only for this spike and
+has since been removed, so the harness defaults to kitty. kitty renders with
+EGL, so it goes through the dmabuf path, not shm. The shm path was verified
+with foot only.
+
 - GPU: RTX 4070 (driver 615.78.08) + Intel UHD 770 (unused), Hyprland 0.57.1 on
   NVIDIA (`AQ_DRM_DEVICES=/dev/dri/nvidia:/dev/dri/intel-igpu`), DP-2 2560x1080
   @ 144 Hz, 8-bit `XRGB8888`, scale 1
@@ -11,7 +16,7 @@ Spike for `PLAN.md` §6.6 steps 1–2, measured 2026-11-09.
 Harness (not part of the `hyprwidget` binary):
 
 ```sh
-cargo run -p hw-embed --example embed-test -- foot
+cargo run -p hw-embed --example embed-test -- kitty
 RUST_LOG=info GDK_DEBUG=offload cargo run -p hw-embed --example embed-test -- vkcube --wsi wayland
 ```
 
@@ -30,6 +35,7 @@ smearing, tearing or stale frames visible in `grim` captures.
 | Client | Buffer path | Format / modifier | syncobj | Rate | Offloaded |
 |---|---|---|---|---|---|
 | `foot` | shm → `GdkMemoryTexture` | `XRGB8888` | – | on damage | no (shm) |
+| `kitty` 0.49.2 (GLFW, EGL) | dmabuf | `AR24` / `0x300000000606014` | yes | on damage | yes |
 | `vkcube --wsi wayland` | dmabuf | `XB30` (10-bit) / `0x300000000e08014` | yes | 144 fps | yes |
 | `es2gears_wayland` (EGL, egl-wayland2) | dmabuf | `XR24` / `0x300000000606014` | yes | 144 fps | yes |
 | `mpv --vo=gpu-next --gpu-api=vulkan` | dmabuf | `AB30` (10-bit) / `0x300000000e08014` | yes | 60 fps (video) | yes |
