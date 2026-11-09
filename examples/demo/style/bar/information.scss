@@ -18,22 +18,10 @@
       .content {
         padding: 5px;
 
+        // No AGS spin: an infinite animation redraws at the monitor's
+        // refresh rate (~3% CPU) for as long as a player plays.
         .mpris-icon {
           border-radius: 50%;
-          animation: spin 10s linear infinite;
-
-          &.paused {
-            animation-play-state: paused;
-          }
-
-          @keyframes spin {
-            from {
-              transform: rotate(0deg);
-            }
-            to {
-              transform: rotate(360deg);
-            }
-          }
         }
       }
     }

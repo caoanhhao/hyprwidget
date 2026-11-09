@@ -71,7 +71,10 @@ local function Mpris(on_active)
         reveal:set(false)
       end)
     end)
-    local icon = common.app_icon(p.desktop_entry ~= "" and p.desktop_entry or p.identity)
+    -- Reactive: a player's identity arrives after its button is built.
+    local icon = player:map(function(q)
+      return common.app_icon(q.desktop_entry ~= "" and q.desktop_entry or q.identity)
+    end)
     return W.MenuButton({
       W.Overlay({
         css = hw.computed(function()
@@ -93,11 +96,12 @@ local function Mpris(on_active)
         Box({
           class = "content",
           spacing = 3,
-          icon and W.Image({
+          W.Image({
             icon = icon,
-            class = playing:map(function(on)
-              return on and "mpris-icon playing" or "mpris-icon paused"
+            visible = icon:map(function(i)
+              return i ~= nil
             end),
+            class = "mpris-icon",
           }),
           W.Revealer({
             reveal = reveal,
