@@ -4,6 +4,7 @@ use gtk4::cairo;
 use hw_ui::gtk4;
 use mlua::{UserData, UserDataMethods};
 
+#[derive(Debug)]
 pub struct Cairo(pub cairo::Context);
 
 fn e(err: cairo::Error) -> mlua::Error {
@@ -11,6 +12,10 @@ fn e(err: cairo::Error) -> mlua::Error {
 }
 
 impl UserData for Cairo {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "flat list of one-line cairo method bindings"
+    )]
     fn add_methods<M: UserDataMethods<Self>>(m: &mut M) {
         m.add_method(
             "set_source_rgba",
@@ -28,10 +33,10 @@ impl UserData for Cairo {
             let rgba = gtk4::gdk::RGBA::parse(css.as_str())
                 .map_err(|_| mlua::Error::runtime(format!("invalid color '{css}'")))?;
             c.0.set_source_rgba(
-                rgba.red() as f64,
-                rgba.green() as f64,
-                rgba.blue() as f64,
-                rgba.alpha() as f64,
+                f64::from(rgba.red()),
+                f64::from(rgba.green()),
+                f64::from(rgba.blue()),
+                f64::from(rgba.alpha()),
             );
             Ok(())
         });

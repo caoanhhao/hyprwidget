@@ -38,7 +38,7 @@ fn rt_err(msg: impl Into<String>) -> mlua::Error {
 }
 
 /// `self` in `setup`/handlers.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LuaWidget {
     pub widget: gtk4::Widget,
     pub kind: Option<Kind>,
@@ -63,9 +63,9 @@ impl UserData for LuaWidget {
         m.add_method("toggle_class", |_, w, (c, on): (String, Option<bool>)| {
             let on = on.unwrap_or(!w.widget.has_css_class(&c));
             if on {
-                w.widget.add_css_class(&c)
+                w.widget.add_css_class(&c);
             } else {
-                w.widget.remove_css_class(&c)
+                w.widget.remove_css_class(&c);
             }
             Ok(on)
         });
@@ -118,14 +118,14 @@ impl UserData for LuaWidget {
                 .map(LuaWindow))
         });
         m.add_meta_method(MetaMethod::ToString, |_, w, ()| {
-            Ok(format!("Widget({})", w.kind.map(Kind::name).unwrap_or("?")))
+            Ok(format!("Widget({})", w.kind.map_or("?", Kind::name)))
         });
         crate::app_widget::add_methods(m);
     }
 }
 
 /// `hw.window.get(name)`.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LuaWindow(pub gtk4::Window);
 
 impl UserData for LuaWindow {
@@ -145,9 +145,9 @@ impl UserData for LuaWindow {
         m.add_method("toggle", |_, w, ()| {
             let show = !w.0.is_visible();
             if show {
-                hw_ui::windows::present(&w.0)
+                hw_ui::windows::present(&w.0);
             } else {
-                w.0.set_visible(false)
+                w.0.set_visible(false);
             }
             Ok(show)
         });
@@ -300,6 +300,10 @@ fn build_table(lua: &Lua, t: &Table) -> Result<gtk4::Widget> {
 }
 
 /// Applies everything in `t` to a freshly created widget.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass over the widget table; each key kind is a short, independent step"
+)]
 fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
     let keep = Keep::for_widget(w);
     let st = RtState::get(lua)?;
@@ -315,7 +319,7 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
     for pair in t.pairs::<Value, Value>() {
         let (k, v) = pair?;
         match k {
-            Value::Integer(i) => positional.push((i, v)),
+            Value::Integer(idx) => positional.push((idx, v)),
             Value::String(k) => {
                 let k = k.to_str()?.to_string();
                 match k.as_str() {
@@ -329,13 +333,13 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
                     // Any widget may own a popover (MenuButton has a slot).
                     "popover" if kind != Kind::MenuButton => popover = Some(v),
                     "name" if kind != Kind::Window => {
-                        if let Value::String(s) = &v {
-                            w.set_widget_name(&s.to_str()?);
+                        if let Value::String(name) = &v {
+                            w.set_widget_name(&name.to_str()?);
                         }
                     }
-                    s if kind.slots().contains(&s) => slots.push((k, v)),
-                    s if widgets::EVENTS.contains(&s) => {
-                        events.push((k, Function::from_lua_value(v)?))
+                    name if kind.slots().contains(&name) => slots.push((k, v)),
+                    name if widgets::EVENTS.contains(&name) => {
+                        events.push((k, Function::from_lua_value(v)?));
                     }
                     _ => props.push((k, v)),
                 }
@@ -348,7 +352,7 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
     let has = |n: &str| props.iter().any(|(k, _)| k == n);
     match kind {
         Kind::Box if !has("spacing") => {
-            bind_option(lua, w, kind, "spacing", "general:gaps_in", &keep)?
+            bind_option(lua, w, kind, "spacing", "general:gaps_in", &keep)?;
         }
         Kind::Revealer | Kind::Stack if !has("duration") && !has("transition_duration") => {
             bind_option(
@@ -358,18 +362,18 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
                 "duration",
                 "animations:animation:layersIn:duration",
                 &keep,
-            )?
+            )?;
         }
         Kind::Window if !has("margin") => {
-            bind_option(lua, w, kind, "margin", "general:gaps_out", &keep)?
+            bind_option(lua, w, kind, "margin", "general:gaps_out", &keep)?;
         }
         // Terminal colors follow the theme (`hw.theme.colors`).
         Kind::Terminal if !has("colors") => {
             let sig = lua.create_userdata(LuaSignal::json(st.core.theme.colors.clone(), None))?;
-            bind_prop(w, kind, "colors", &Value::UserData(sig), &keep)?
+            bind_prop(w, kind, "colors", &Value::UserData(sig), &keep)?;
         }
         Kind::App if !has("rounding") => {
-            bind_option(lua, w, kind, "rounding", "decoration:rounding", &keep)?
+            bind_option(lua, w, kind, "rounding", "decoration:rounding", &keep)?;
         }
         _ => {}
     }
@@ -390,13 +394,15 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
         let mut list: Vec<Value> = positional.into_iter().map(|(_, v)| v).collect();
         match children {
             Some(Value::Table(ct)) => {
-                list.extend(ct.sequence_values::<Value>().collect::<Result<Vec<_>>>()?)
+                list.extend(ct.sequence_values::<Value>().collect::<Result<Vec<_>>>()?);
             }
-            Some(v) if as_signal(&v).is_some() => {
-                bind_children(lua, w, kind, t, list, as_signal(&v).unwrap(), &keep)?;
-                list = Vec::new();
+            Some(v) => {
+                if let Some(sig) = as_signal(&v) {
+                    bind_children(lua, w, kind, t, list, &sig, &keep)?;
+                    list = Vec::new();
+                }
             }
-            _ => {}
+            None => {}
         }
         if !list.is_empty() {
             let built = build_children(lua, &list)?;
@@ -415,13 +421,16 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
         if hidden && slot == "child" {
             let weak = lua.weak();
             let keep = keep.clone();
-            hw_ui::windows::defer_content(w.downcast_ref().unwrap(), move |win| {
+            let win = w
+                .downcast_ref()
+                .expect("only a Kind::Window can start hidden");
+            hw_ui::windows::defer_content(win, move |win| {
                 let Some(lua) = weak.try_upgrade() else {
                     return;
                 };
                 // May run inside a signal notification (`visible` turning true).
                 let res = hw_core::reactive::untracked(|| {
-                    bind_slot(&lua, win.upcast_ref(), kind, "child", v, &keep)
+                    bind_slot(&lua, win.upcast_ref(), kind, "child", &v, &keep)
                 });
                 if let Err(e) = res {
                     log_lua_error(&lua, &format!("window '{}'", win.widget_name()), &e);
@@ -429,7 +438,7 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
             });
             continue;
         }
-        bind_slot(lua, w, kind, &slot, v, &keep)?;
+        bind_slot(lua, w, kind, &slot, &v, &keep)?;
     }
     if let Some(v) = popover {
         attach_popover(lua, w, &v)?;
@@ -457,11 +466,11 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
         .map_err(rt_err)?;
     }
     if let Some(v) = css {
-        bind_css(lua, w, v, &keep, |v| Ok(lua_to_prop(v).to_text()))?;
+        bind_css(lua, w, &v, &keep, |v| Ok(lua_to_prop(v).to_text()))?;
     }
     if let Some(v) = theme {
         let weak = lua.weak();
-        bind_css(lua, w, v, &keep, move |v| {
+        bind_css(lua, w, &v, &keep, move |v| {
             let lua = weak.try_upgrade().ok_or_else(|| rt_err("lua gone"))?;
             let j = hw_core::options::expand_keys(&lua_to_json(&lua, v.clone())?);
             Ok(hw_core::options::css_decls(&j))
@@ -480,7 +489,9 @@ fn configure(lua: &Lua, w: &gtk4::Widget, kind: Kind, t: &Table) -> Result<()> {
     if let Some(v) = visible {
         bind_prop(w, kind, "visible", &v, &keep)?;
     } else if kind == Kind::Window {
-        w.downcast_ref::<gtk4::Window>().unwrap().present();
+        w.downcast_ref::<gtk4::Window>()
+            .expect("a Kind::Window widget is a gtk4::Window")
+            .present();
     }
     let _ = st;
     Ok(())
@@ -519,7 +530,7 @@ fn bind_children(
     kind: Kind,
     t: &Table,
     fixed: Vec<Value>,
-    sig: LuaSignal,
+    sig: &LuaSignal,
     keep: &Keep,
 ) -> Result<()> {
     let cols = columns(t)?;
@@ -552,10 +563,10 @@ fn bind_slot(
     w: &gtk4::Widget,
     kind: Kind,
     slot: &str,
-    v: Value,
+    v: &Value,
     keep: &Keep,
 ) -> Result<()> {
-    if let Some(sig) = as_signal(&v) {
+    if let Some(sig) = as_signal(v) {
         // A signal in a slot: rebuild the slot's child on change.
         let t = lua.create_table()?;
         t.set("type", "With")?;
@@ -563,13 +574,13 @@ fn bind_slot(
         let child = build_with(lua, &t)?;
         return widgets::set_slot(w, kind, slot, Some(&child)).map_err(rt_err);
     }
-    let child = build(lua, &v)?;
+    let child = build(lua, v)?;
     widgets::set_slot(w, kind, slot, child.as_ref()).map_err(rt_err)?;
     let _ = keep;
     Ok(())
 }
 
-/// `popover = W.Popover{…}` on a widget other than MenuButton: the popover
+/// `popover = W.Popover{…}` on a widget other than `MenuButton`: the popover
 /// is parented to the widget (open it with its `open` prop) and unparented
 /// with it.
 fn attach_popover(lua: &Lua, w: &gtk4::Widget, v: &Value) -> Result<()> {
@@ -587,17 +598,17 @@ fn attach_popover(lua: &Lua, w: &gtk4::Widget, v: &Value) -> Result<()> {
 fn bind_css(
     lua: &Lua,
     w: &gtk4::Widget,
-    v: Value,
+    v: &Value,
     keep: &Keep,
     to_decls: impl Fn(&Value) -> Result<String> + 'static,
 ) -> Result<()> {
     let st = RtState::get(lua)?;
     let Some(ui) = &st.core.ui else { return Ok(()) };
-    let styles = ui.styles.clone();
+    let styles = Rc::clone(&ui.styles);
     let holder: Rc<RefCell<Option<hw_ui::style::InlineCss>>> = Rc::default();
-    keep.push(holder.clone());
+    keep.push(Rc::clone(&holder));
     let apply = {
-        let (styles, holder, weak) = (styles.clone(), holder.clone(), w.downgrade());
+        let (styles, holder, weak) = (styles, holder, w.downgrade());
         move |v: &Value| -> Result<()> {
             let Some(w) = weak.upgrade() else {
                 return Ok(());
@@ -609,7 +620,7 @@ fn bind_css(
             Ok(())
         }
     };
-    match as_signal(&v) {
+    match as_signal(v) {
         Some(sig) => {
             let weak = lua.weak();
             let src = sig.clone();
@@ -625,7 +636,7 @@ fn bind_css(
                 }
             })));
         }
-        None => apply(&v)?,
+        None => apply(v)?,
     }
     Ok(())
 }
@@ -709,17 +720,20 @@ fn build_for(lua: &Lua, t: &Table) -> Result<gtk4::Widget> {
         for (i, item) in items.sequence_values::<Value>().enumerate() {
             let item = item?;
             let key = match &key_fn {
-                Some(kf) => crate::convert::display(&lua, kf.call::<Value>(item.clone())?),
+                Some(kf) => crate::convert::display(&lua, &kf.call::<Value>(item.clone())?),
                 None => match &item {
                     Value::String(_) | Value::Integer(_) | Value::Number(_) | Value::Boolean(_) => {
-                        crate::convert::display(&lua, item.clone())
+                        crate::convert::display(&lua, &item)
                     }
                     _ => format!("#{i}"),
                 },
             };
             let widget = match cache.borrow_mut().remove(&key) {
                 Some(old) => old,
-                None => match build(&lua, &f.call::<Value>((item, i as i64 + 1))?)? {
+                None => match build(
+                    &lua,
+                    &f.call::<Value>((item, crate::convert::lua_index(i)?))?,
+                )? {
                     Some(nw) => nw,
                     None => continue,
                 },
@@ -787,9 +801,9 @@ pub fn build_window(lua: &Lua, t: &Table) -> Result<String> {
 /// `hw.layout(path)`: loads a JSON node tree as widget tables. Values of
 /// the form `{"$bind": "settings.<key>"}` / `{"$bind": "option.<name>"}`
 /// become signals.
-pub fn load_layout(lua: &Lua, path: String) -> Result<Value> {
+pub fn load_layout(lua: &Lua, path: &str) -> Result<Value> {
     let st = RtState::get(lua)?;
-    let p = st.core.dir.path(&path);
+    let p = st.core.dir.path(path);
     let text = std::fs::read_to_string(&p).map_err(|e| rt_err(format!("{}: {e}", p.display())))?;
     let json: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| rt_err(format!("{}: {e}", p.display())))?;
@@ -799,7 +813,7 @@ pub fn load_layout(lua: &Lua, path: String) -> Result<Value> {
 fn bind_source(lua: &Lua, spec: &str) -> Result<Value> {
     let st = RtState::get(lua)?;
     let sig = if let Some(key) = spec.strip_prefix("settings.") {
-        let s = st.core.settings.clone();
+        let s = Rc::clone(&st.core.settings);
         let k = key.to_owned();
         let setter: crate::signal::JsonSetter = Rc::new(move |v| s.set(&k, v).map(|_| ()));
         LuaSignal::json(st.core.settings.signal(key), Some(setter))

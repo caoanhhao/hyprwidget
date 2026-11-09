@@ -3,7 +3,7 @@
 use hw_ui::monitors::MonitorInfo;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct LuaMonitor(pub MonitorInfo);
 
 impl UserData for LuaMonitor {
