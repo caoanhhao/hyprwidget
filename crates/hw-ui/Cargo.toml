@@ -12,3 +12,5 @@ anyhow.workspace = true
 gtk4.workspace = true
 gtk4-layer-shell.workspace = true
 tracing.workspace = true
+grass.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,30 @@
+// Built-in hyprwidget stylesheet. Every value comes from Hyprland through
+// the generated `_hypr.scss` (PLAN.md §3.6); user styles load on top.
+@import "hypr";
+
+window.hw-window {
+  background: transparent;
+  font-family: $misc-font_family;
+}
+
+// Surfaces that look like a Hyprland window: same rounding, border,
+// opacity and shadow.
+.hw-panel {
+  border-radius: $decoration-rounding;
+  border: $general-border_size solid $general-col-inactive_border-color;
+  opacity: $decoration-inactive_opacity;
+  transition: opacity $animations-animation-fadeLayersIn-duration $animations-animation-fadeLayersIn-easing,
+    border-color $animations-animation-fadeLayersIn-duration $animations-animation-fadeLayersIn-easing;
+  @if $decoration-shadow-enabled {
+    box-shadow: 0 0 $decoration-shadow-range $decoration-shadow-color-color;
+  }
+}
+
+.hw-panel:hover {
+  border-color: $general-col-active_border-color;
+  opacity: $decoration-active_opacity;
+}
+
+.hw-card {
+  border-radius: $decoration-rounding;
+}

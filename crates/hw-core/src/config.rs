@@ -91,6 +91,79 @@ impl ConfigDir {
     pub fn load_json(&self) -> Result<serde_json::Value> {
         load_json(&self.json())
     }
+
+    /// Resolves a path from the config: `~/` is expanded, relative paths are
+    /// relative to the config dir.
+    pub fn path(&self, p: &str) -> PathBuf {
+        match p.strip_prefix("~/") {
+            Some(rest) => std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(rest),
+            None => self.root.join(p),
+        }
+    }
+
+    /// Loads `config.json` into the app settings and the option layer.
+    pub fn load_app(&self) -> Result<AppConfig> {
+        AppConfig::from_json(self, &self.load_json()?)
+    }
+}
+
+/// Keys of `config.json` that configure the app itself; every other key is
+/// an option (same tree as `hw.config{}`).
+pub const APP_KEYS: &[&str] = &[
+    "settings_file",
+    "style",
+    "layer_rules",
+    "theme",
+    "plugins",
+    "monitors",
+];
+
+/// App-level settings from `config.json`.
+#[derive(Debug, Clone)]
+pub struct AppConfig {
+    /// AGS-compatible settings store.
+    pub settings_file: PathBuf,
+    /// SCSS/CSS entry point.
+    pub style: PathBuf,
+    /// Register Hyprland layer rules (blur…) for our namespaces.
+    pub layer_rules: bool,
+    /// Option overrides from JSON (nested; flat keys expanded).
+    pub options: serde_json::Value,
+}
+
+impl AppConfig {
+    pub fn from_json(dir: &ConfigDir, v: &serde_json::Value) -> Result<Self> {
+        let empty = serde_json::Map::new();
+        let obj = match v {
+            serde_json::Value::Null => &empty,
+            serde_json::Value::Object(o) => o,
+            _ => anyhow::bail!("{}: top level must be an object", dir.json().display()),
+        };
+        let str_key = |k: &str, def: &str| -> Result<PathBuf> {
+            match obj.get(k) {
+                None => Ok(dir.path(def)),
+                Some(serde_json::Value::String(s)) => Ok(dir.path(s)),
+                Some(other) => anyhow::bail!("config.json: '{k}' must be a string, got {other}"),
+            }
+        };
+        let options: serde_json::Map<_, _> = obj
+            .iter()
+            .filter(|(k, _)| !APP_KEYS.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        Ok(Self {
+            settings_file: str_key("settings_file", "cache/settings/settings.json")?,
+            style: str_key("style", "style/main.scss")?,
+            layer_rules: obj
+                .get("layer_rules")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+            options: crate::options::expand_keys(&serde_json::Value::Object(options)),
+        })
+    }
 }
 
 fn load_json(path: &Path) -> Result<serde_json::Value> {
