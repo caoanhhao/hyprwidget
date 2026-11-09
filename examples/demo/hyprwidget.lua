@@ -16,6 +16,7 @@ require_all({
   "wallpaper",
   "always_on",
   "keystrokes",
+  "panels",
 })
 
 require_custom_dir()

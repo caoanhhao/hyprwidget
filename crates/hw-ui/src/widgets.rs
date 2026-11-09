@@ -107,6 +107,7 @@ pub enum Kind {
     Calendar,
     Terminal,
     App,
+    Picture,
 }
 
 impl Kind {
@@ -134,6 +135,7 @@ impl Kind {
         Kind::Calendar,
         Kind::Terminal,
         Kind::App,
+        Kind::Picture,
     ];
 
     pub fn name(self) -> &'static str {
@@ -161,6 +163,7 @@ impl Kind {
             Kind::Calendar => "Calendar",
             Kind::Terminal => "Terminal",
             Kind::App => "App",
+            Kind::Picture => "Picture",
         }
     }
 
@@ -225,6 +228,7 @@ pub fn create(kind: Kind) -> gtk4::Widget {
         Kind::Calendar => gtk4::Calendar::new().upcast(),
         Kind::Terminal => crate::terminal::create(),
         Kind::App => crate::app::create(),
+        Kind::Picture => gtk4::Picture::new().upcast(),
     };
     if kind == Kind::Box {
         // Orientation defaults; `vertical = true` flips it.
@@ -499,6 +503,12 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
             .downcast_ref::<gtk4::Image>()
             .unwrap()
             .set_from_file(v.as_str()),
+        // Scaled image; `content_fit` ("cover", "contain"…) and `can_shrink`
+        // go through the GObject fallback.
+        (Kind::Picture, "file") => w
+            .downcast_ref::<gtk4::Picture>()
+            .unwrap()
+            .set_filename(v.as_str().filter(|s| !s.is_empty())),
         (Kind::Image | Kind::Icon, "pixel_size" | "size") => w
             .downcast_ref::<gtk4::Image>()
             .unwrap()

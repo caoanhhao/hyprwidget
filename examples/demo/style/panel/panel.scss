@@ -12,7 +12,7 @@
       border-radius: 0px;
       padding: $SCALE $SCALE - 10;
 
-      &:not(:checked) {
+      &:not(:checked):not(.checked) {
         background-color: transparent;
       }
     }

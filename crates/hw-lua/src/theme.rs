@@ -722,8 +722,31 @@ fn attach_service(lua: &Lua, st: &RtState, t: &Table) -> Result<()> {
             return Ok(());
         }
     };
-    if let Some(colors) = svc.prop("colors") {
-        st.core.theme.set_source(WALLPAPER_SOURCE, colors.clone());
+    // The palette becomes the `wallpaper` source only once a wallpaper (or a
+    // source color) is set; until then a `"source": "wallpaper"` theme uses
+    // its own colors (the service's palette is just material-colors' default).
+    if let (Some(colors), Some(wallpaper), Some(source)) = (
+        svc.prop("colors"),
+        svc.prop("wallpaper"),
+        svc.prop("source"),
+    ) {
+        let default_source = source.get();
+        let apply = {
+            let core = Rc::downgrade(&st.core);
+            let (colors, wallpaper, source) = (colors.clone(), wallpaper.clone(), source.clone());
+            move || {
+                let Some(core) = core.upgrade() else { return };
+                if wallpaper.get().is_null() && source.get() == default_source {
+                    core.theme.remove_source(WALLPAPER_SOURCE);
+                } else {
+                    core.theme.set_source(WALLPAPER_SOURCE, colors.clone());
+                }
+            }
+        };
+        apply();
+        let a = apply.clone();
+        st.keep(Box::new(wallpaper.subscribe(move |_| a())));
+        st.keep(Box::new(source.subscribe(move |_| apply())));
     }
     let ud = lua.create_userdata(crate::service::LuaService(svc))?;
     let mt = lua.create_table()?;

@@ -1,5 +1,8 @@
+// AGS drew Cava as a label of block characters; hyprwidget draws bars with
+// cairo in a DrawingArea (config/panels/cava.lua) using the CSS `color`.
 .cava {
   padding: 0px;
-  margin: 0px;
-  font-size: $phi_min + em;
+  margin: 0px 5px;
+  color: $foreground;
+  opacity: 0.8;
 }

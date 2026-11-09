@@ -365,4 +365,10 @@ end
 -- Full weather card (AGS <Weather />), also used by the always-on widget.
 M.details = details
 
+-- AGS widgets/Weather.tsx `Weather`: the details card on its own (the
+-- AlwaysOnWidget / panels use it as W.Weather{}).
+hw.define("Weather", function(props)
+  return Box({ class = props.class, details() })
+end)
+
 return M

@@ -11,7 +11,7 @@
   }
 
   .widget-actions .Donations {
-    &:not(:checked) {
+    &:not(:checked):not(.checked) {
       color: #052d49;
       background: #f96854;
     }
