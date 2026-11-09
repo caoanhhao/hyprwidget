@@ -20,7 +20,7 @@ use hw_core::{hyprland, options};
 use mlua::{Lua, Result, Table, Value};
 use serde_json::Value as Json;
 
-use crate::convert::lua_to_json;
+use crate::convert::{LuaResultExt, lua_to_json};
 use crate::runtime::{RtState, apply_options};
 
 pub fn install(lua: &Lua, hw: &Table) -> Result<()> {
@@ -37,14 +37,14 @@ pub fn install(lua: &Lua, hw: &Table) -> Result<()> {
 }
 
 fn set_option(lua: &Lua, name: &str, value: Value, target: &str) -> anyhow::Result<String> {
-    let st = RtState::get(lua).map_err(lua_err)?;
+    let st = RtState::get(lua).anyhow()?;
     let path = options::name_to_path(name);
     anyhow::ensure!(
         !path.is_empty() && path.iter().all(|s| valid_segment(s)),
         "invalid option name"
     );
     let name = options::path_to_name(&path);
-    let value = lua_to_json(lua, value).map_err(lua_err)?;
+    let value = lua_to_json(lua, value).anyhow()?;
     anyhow::ensure!(
         matches!(
             value,
@@ -72,13 +72,9 @@ fn set_option(lua: &Lua, name: &str, value: Value, target: &str) -> anyhow::Resu
         write_custom(&st.core.dir.root.join("config/custom"), &name, &line)?;
         let v = options::normalize(&name, &value).map_err(anyhow::Error::msg)?;
         options::insert(&mut st.user_opts.borrow_mut(), &path, v);
-        apply_options(lua, &st).map_err(lua_err)?;
+        apply_options(lua, &st);
         Ok("widget".into())
     }
-}
-
-fn lua_err(e: mlua::Error) -> anyhow::Error {
-    anyhow::anyhow!("{e}")
 }
 
 fn valid_segment(s: &str) -> bool {
@@ -130,7 +126,9 @@ fn lua_value(v: &Json) -> String {
     match v {
         Json::Bool(b) => b.to_string(),
         Json::Number(n) => match n.as_f64() {
-            Some(f) if f.fract() == 0.0 && f.abs() < 1e15 => format!("{}", f as i64),
+            Some(f) if f.fract() == 0.0 && f.abs() < 1e15 => {
+                format!("{}", crate::convert::whole_f64_to_i64(f))
+            }
             _ => n.to_string(),
         },
         Json::Array(a) => format!(

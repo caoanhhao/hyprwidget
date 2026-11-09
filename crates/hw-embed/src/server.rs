@@ -1,4 +1,4 @@
-//! In-process Wayland server (smithay), dispatched from the GLib main loop.
+//! In-process Wayland server (smithay), dispatched from the `GLib` main loop.
 //!
 //! Every app session (one [`EmbedView`] run) has a [`ViewId`]; its clients
 //! carry it in their [`ClientState`], so the server knows which widget a
@@ -78,6 +78,7 @@ use smithay::{
 };
 
 use crate::buffer;
+use crate::cast;
 use crate::clipboard::Clipboards;
 use crate::input::{KeyLookup, KeyboardConfig};
 use crate::popup::Popup;
@@ -91,6 +92,12 @@ pub(crate) type ViewId = u64;
 /// Handle to the nested compositor. Cheap to clone; lives on the GTK thread.
 #[derive(Clone)]
 pub struct EmbedServer(Rc<Inner>);
+
+impl std::fmt::Debug for EmbedServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbedServer").finish_non_exhaustive()
+    }
+}
 
 struct Inner {
     display: RefCell<Display<State>>,
@@ -106,7 +113,7 @@ thread_local! {
 }
 
 impl EmbedServer {
-    /// Creates a server and attaches its fd to the default GLib main context.
+    /// Creates a server and attaches its fd to the default `GLib` main context.
     /// Must be called after GTK is initialised (dmabuf formats come from GDK).
     pub fn new() -> anyhow::Result<Self> {
         let display: Display<State> = Display::new()?;
@@ -149,16 +156,13 @@ impl EmbedServer {
     /// Runs `f` on the state now, or from an idle if the state is busy
     /// (a GTK callback fired while the server was dispatching).
     pub(crate) fn run(&self, f: impl FnOnce(&mut State) + 'static) {
-        match self.0.state.try_borrow_mut() {
-            Ok(mut st) => {
-                f(&mut st);
-                drop(st);
-                self.flush();
-            }
-            Err(_) => {
-                let s = self.clone();
-                glib::idle_add_local_once(move || s.run(f));
-            }
+        if let Ok(mut st) = self.0.state.try_borrow_mut() {
+            f(&mut st);
+            drop(st);
+            self.flush();
+        } else {
+            let s = self.clone();
+            glib::idle_add_local_once(move || s.run(f));
         }
     }
 
@@ -199,7 +203,7 @@ impl EmbedServer {
             .borrow()
             .views
             .get(&id)
-            .map(|v| v.clients.clone())
+            .map(|v| Arc::clone(&v.clients))
             .unwrap_or_default()
     }
 
@@ -212,7 +216,7 @@ impl EmbedServer {
             Arc::new(ClientState {
                 view: id,
                 compositor: CompositorClientState::default(),
-                clients: clients.clone(),
+                clients: Arc::clone(&clients),
             }),
         );
         if r.is_err() {
@@ -269,7 +273,7 @@ impl EmbedServer {
             if let Some(slot) = st.views.get(&id) {
                 for (t, sv) in &slot.toplevels {
                     if t.parent().is_none() {
-                        configure_toplevel(t, size, true);
+                        configure_toplevel(t, size, ToplevelKind::Main);
                     } else {
                         let _ = sv;
                     }
@@ -309,17 +313,17 @@ impl EmbedServer {
                 .roots
                 .keys()
                 .filter_map(|k| st.surface_by_id(k))
-                .filter(|s| st.view_of(s) == Some(id))
+                .filter(|s| view_of(s) == Some(id))
                 .collect();
             for root in roots {
                 with_surface_tree_downward(
                     &root,
                     (),
-                    |_, _, _| TraversalAction::DoChildren(()),
-                    |_, states, _| {
-                        with_fractional_scale(states, |fs| fs.set_preferred_scale(scale))
+                    |_, _, ()| TraversalAction::DoChildren(()),
+                    |_, states, ()| {
+                        with_fractional_scale(states, |fs| fs.set_preferred_scale(scale));
                     },
-                    |_, _, _| true,
+                    |_, _, ()| true,
                 );
             }
             st.output
@@ -351,8 +355,17 @@ pub(crate) fn flush_later() {
     });
 }
 
+/// Main window or dialog (a toplevel with a parent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToplevelKind {
+    /// Fills the widget: told it is maximized and tiled on every edge.
+    Main,
+    /// Keeps its own size and is centred over the main window.
+    Dialog,
+}
+
 /// `size = None` lets the client pick its own size (dialogs, `scale` mode).
-fn configure_toplevel(toplevel: &ToplevelSurface, size: Option<(i32, i32)>, fill: bool) {
+fn configure_toplevel(toplevel: &ToplevelSurface, size: Option<(i32, i32)>, kind: ToplevelKind) {
     toplevel.with_pending_state(|s| {
         s.size = size
             .filter(|(w, h)| *w > 0 && *h > 0)
@@ -365,7 +378,7 @@ fn configure_toplevel(toplevel: &ToplevelSurface, size: Option<(i32, i32)>, fill
             xdg_toplevel::State::TiledTop,
             xdg_toplevel::State::TiledBottom,
         ] {
-            if fill {
+            if kind == ToplevelKind::Main {
                 s.states.set(st);
             } else {
                 s.states.unset(st);
@@ -438,7 +451,7 @@ pub(crate) fn surface_info<R>(states: &SurfaceData, f: impl FnOnce(&mut SurfaceI
     f(&mut states
         .data_map
         .get::<RefCell<SurfaceInfo>>()
-        .unwrap()
+        .expect("inserted just above")
         .borrow_mut())
 }
 
@@ -448,6 +461,12 @@ fn sub_loc(states: &SurfaceData) -> Point<i32, Logical> {
         .get::<SubsurfaceCachedState>()
         .current()
         .location
+}
+
+/// Session the client owning `surface` belongs to.
+pub(crate) fn view_of(surface: &WlSurface) -> Option<ViewId> {
+    let client = surface.client()?;
+    client.get_data::<ClientState>().map(|c| c.view)
 }
 
 pub(crate) fn root_of(surface: &WlSurface) -> WlSurface {
@@ -485,8 +504,8 @@ pub(crate) fn surface_under(root: &WlSurface, p: (f64, f64)) -> Option<(WlSurfac
             let Some((w, h)) = surface_info(states, |i| i.size) else {
                 return;
             };
-            let (lx, ly) = (p.0 - loc.x as f64, p.1 - loc.y as f64);
-            if lx < 0.0 || ly < 0.0 || lx >= w as f64 || ly >= h as f64 {
+            let (lx, ly) = (p.0 - f64::from(loc.x), p.1 - f64::from(loc.y));
+            if lx < 0.0 || ly < 0.0 || lx >= f64::from(w) || ly >= f64::from(h) {
                 return;
             }
             let inside = states
@@ -495,7 +514,7 @@ pub(crate) fn surface_under(root: &WlSurface, p: (f64, f64)) -> Option<(WlSurfac
                 .current()
                 .input_region
                 .as_ref()
-                .is_none_or(|r| r.contains((lx as i32, ly as i32)));
+                .is_none_or(|r| r.contains((cast::px(lx), cast::px(ly))));
             if inside {
                 *found.borrow_mut() = Some((s.clone(), (loc.x, loc.y)));
             }
@@ -519,7 +538,7 @@ pub(crate) struct State {
     _cursor_shape: CursorShapeManagerState,
     data_device: DataDeviceState,
     primary: PrimarySelectionState,
-    seat_state: SeatState<State>,
+    seats: SeatState<State>,
     pub(crate) seat: Seat<State>,
     pub(crate) pointer: PointerHandle<State>,
     pub(crate) keyboard: KeyboardHandle<State>,
@@ -564,8 +583,8 @@ impl State {
         let text_input = TextInputState::new(&dh);
 
         let kb = KeyboardConfig::from_hyprland();
-        let mut seat_state = SeatState::new();
-        let mut seat = seat_state.new_wl_seat(&dh, "hw-embed");
+        let mut seats = SeatState::new();
+        let mut seat = seats.new_wl_seat(&dh, "hw-embed");
         let keyboard = seat
             .add_keyboard(
                 XkbConfig {
@@ -587,57 +606,8 @@ impl State {
         let touch = seat.add_touch();
         let key_lookup = KeyLookup::new(&kb);
 
-        let output = Output::new(
-            "HW-EMBED-1".into(),
-            PhysicalProperties {
-                size: (0, 0).into(),
-                subpixel: Subpixel::Unknown,
-                make: "hyprwidget".into(),
-                model: "embed".into(),
-            },
-        );
-        let _ = output.create_global::<Self>(&dh);
-        let mode = OutputMode {
-            size: (1920, 1080).into(),
-            refresh: 60_000,
-        };
-        output.change_current_state(
-            Some(mode),
-            None,
-            Some(Scale::Integer(1)),
-            Some((0, 0).into()),
-        );
-        output.set_preferred(mode);
-
-        let mut dmabuf = DmabufState::new();
-        let mut dmabuf_global = None;
-        let mut syncobj = None;
-        match render_node() {
-            Some(node) => {
-                let formats = gdk_dmabuf_formats(&gdk_display);
-                tracing::info!(node = %node.display(), formats = formats.len(), "dmabuf");
-                let dev = std::fs::metadata(&node)?.rdev();
-                if !formats.is_empty() {
-                    let feedback = DmabufFeedbackBuilder::new(dev, formats).build()?;
-                    dmabuf_global =
-                        Some(dmabuf.create_global_with_default_feedback::<Self>(&dh, &feedback));
-                }
-                let fd: OwnedFd = std::fs::OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&node)?
-                    .into();
-                let drm = DrmDeviceFd::new(DeviceFd::from(fd));
-                if std::env::var_os("HW_EMBED_NO_SYNCOBJ").is_some() {
-                    tracing::warn!("HW_EMBED_NO_SYNCOBJ set; linux-drm-syncobj disabled");
-                } else if supports_syncobj_eventfd(&drm) {
-                    syncobj = Some(DrmSyncobjState::new::<Self>(&dh, drm));
-                } else {
-                    tracing::warn!("DRM device lacks syncobj eventfd; linux-drm-syncobj disabled");
-                }
-            }
-            None => tracing::warn!("no DRM render node; dmabuf disabled"),
-        }
+        let output = new_output(&dh);
+        let (dmabuf, dmabuf_global, syncobj) = dmabuf_setup(&dh, &gdk_display)?;
 
         let clipboards = Clipboards::new(&gdk_display);
         Ok(Self {
@@ -654,7 +624,7 @@ impl State {
             _cursor_shape: cursor_shape,
             data_device,
             primary,
-            seat_state,
+            seats,
             seat,
             pointer,
             keyboard,
@@ -675,11 +645,6 @@ impl State {
             cursor_surface: None,
             kb_focus: None,
         })
-    }
-
-    pub(crate) fn view_of(&self, surface: &WlSurface) -> Option<ViewId> {
-        let client = surface.client()?;
-        client.get_data::<ClientState>().map(|c| c.view)
     }
 
     pub(crate) fn view_widget(&self, id: ViewId) -> Option<EmbedView> {
@@ -707,66 +672,7 @@ impl State {
 
     /// Applies a committed surface tree to its widget.
     fn render_tree(&mut self, id: ViewId, root: &WlSurface) {
-        struct Item {
-            surface: WlSurface,
-            loc: (i32, i32),
-            buffer: Option<BufferAssignment>,
-            damage: Vec<Damage>,
-            acquire: Option<DrmSyncPoint>,
-            release: Option<DrmSyncPoint>,
-            size: Option<(i32, i32)>,
-        }
-        let mut items: Vec<Item> = Vec::new();
-        let mut callbacks = Vec::new();
-        with_surface_tree_upward(
-            root,
-            Point::<i32, Logical>::from((0, 0)),
-            |_, states, loc| TraversalAction::DoChildren(*loc + sub_loc(states)),
-            |s, states, loc| {
-                let loc = *loc + sub_loc(states);
-                let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-                let attrs = attrs.current();
-                let buffer = attrs.buffer.take();
-                let damage = std::mem::take(&mut attrs.damage);
-                callbacks.append(&mut attrs.frame_callbacks);
-                let (scale, transform) = (attrs.buffer_scale, attrs.buffer_transform);
-                let mut sync = states.cached_state.get::<DrmSyncobjCachedState>();
-                let sync = sync.current();
-                let (acquire, release) = (sync.acquire_point.take(), sync.release_point.take());
-                let mut vp = states.cached_state.get::<ViewportCachedState>();
-                let vp = vp.current();
-                let size = surface_info(states, |info| {
-                    match &buffer {
-                        Some(BufferAssignment::NewBuffer(b)) => {
-                            info.size = buffer::buffer_size(b).map(|bs| {
-                                let s = buffer::logical_size(
-                                    bs,
-                                    scale,
-                                    transform,
-                                    vp.dst,
-                                    vp.src.map(|r| r.size),
-                                );
-                                (s.w, s.h)
-                            });
-                        }
-                        Some(BufferAssignment::Removed) => info.size = None,
-                        None => {}
-                    }
-                    info.size
-                });
-                items.push(Item {
-                    surface: s.clone(),
-                    loc: (loc.x, loc.y),
-                    buffer,
-                    damage,
-                    acquire,
-                    release,
-                    size,
-                });
-            },
-            |_, _, _| true,
-        );
-
+        let (items, callbacks) = collect_tree(root);
         let sv = self.sv_of(root);
         if let Some(slot) = self.views.get_mut(&id) {
             slot.frame_callbacks.extend(callbacks);
@@ -783,7 +689,7 @@ impl State {
         let Some(sv) = sv else {
             for it in items {
                 if let Some(BufferAssignment::NewBuffer(b)) = it.buffer {
-                    buffer::discard(b, it.release);
+                    buffer::discard(&b, it.release);
                 }
             }
             return;
@@ -805,7 +711,7 @@ impl State {
                         flush_later,
                     ) {
                         Ok((tex, _dmabuf)) => match it.acquire {
-                            Some(point) => wait_acquire(&sv, sid.clone(), point, tex),
+                            Some(point) => wait_acquire(&sv, sid.clone(), &point, tex),
                             None => sv.set_texture(&sid, Some(&tex)),
                         },
                         Err(e) => tracing::warn!("buffer import failed: {e:#}"),
@@ -850,7 +756,11 @@ impl State {
         sv.set_layout(order, geometry);
 
         if let Some(popup) = self.popups.get_mut(&root.id()) {
-            popup.set_mapped(mapped);
+            if mapped {
+                popup.map();
+            } else {
+                popup.unmap();
+            }
         } else if let Some(view) = self.view_widget(id) {
             view.content_changed();
         }
@@ -863,7 +773,7 @@ impl State {
             let hotspot = states
                 .data_map
                 .get::<CursorImageSurfaceData>()
-                .map(|d| d.lock().unwrap().hotspot)
+                .map(|d| d.lock().expect("cursor data mutex poisoned").hotspot)
                 .unwrap_or_default();
             let mut sync = states.cached_state.get::<DrmSyncobjCachedState>();
             (
@@ -873,29 +783,29 @@ impl State {
                 hotspot,
             )
         });
-        let now = glib::monotonic_time() / 1000;
+        let now = cast::time_ms(glib::monotonic_time());
         for cb in callbacks {
-            cb.done(now as u32);
+            cb.done(now);
         }
         let Some(BufferAssignment::NewBuffer(b)) = buffer else {
             return;
         };
         if self.cursor_surface.as_ref() != Some(surface) {
-            buffer::discard(b, release);
+            buffer::discard(&b, release);
             return;
         }
         match buffer::import(&self.gdk_display, b, &[], None, release, flush_later) {
             Ok((tex, _)) => {
                 let cursor = gdk::Cursor::from_texture(&tex, hotspot.x, hotspot.y, None);
-                self.set_cursor(Some(cursor));
+                self.set_cursor(Some(&cursor));
             }
             Err(e) => tracing::debug!("cursor buffer: {e:#}"),
         }
     }
 
-    fn set_cursor(&self, cursor: Option<gdk::Cursor>) {
+    fn set_cursor(&self, cursor: Option<&gdk::Cursor>) {
         if let Some(sv) = self.pointer_root.as_ref().and_then(|r| self.sv_of(r)) {
-            sv.set_cursor(cursor.as_ref());
+            sv.set_cursor(cursor);
         }
     }
 
@@ -919,9 +829,9 @@ impl State {
             let d = s
                 .data_map
                 .get::<XdgToplevelSurfaceData>()
-                .unwrap()
+                .expect("every xdg_toplevel has XdgToplevelSurfaceData")
                 .lock()
-                .unwrap();
+                .expect("toplevel data mutex poisoned");
             (
                 d.title.clone().unwrap_or_default(),
                 d.app_id.clone().unwrap_or_default(),
@@ -931,6 +841,74 @@ impl State {
             view.set_identity(&title, &app_id);
         }
     }
+}
+
+/// One surface of a committed tree, with its newly committed state.
+struct Item {
+    surface: WlSurface,
+    loc: (i32, i32),
+    buffer: Option<BufferAssignment>,
+    damage: Vec<Damage>,
+    acquire: Option<DrmSyncPoint>,
+    release: Option<DrmSyncPoint>,
+    size: Option<(i32, i32)>,
+}
+
+/// Takes the committed state of every surface of `root`'s tree (bottom to
+/// top) and its frame callbacks.
+fn collect_tree(root: &WlSurface) -> (Vec<Item>, Vec<WlCallback>) {
+    let mut items: Vec<Item> = Vec::new();
+    let mut callbacks = Vec::new();
+    with_surface_tree_upward(
+        root,
+        Point::<i32, Logical>::from((0, 0)),
+        |_, states, loc| TraversalAction::DoChildren(*loc + sub_loc(states)),
+        |s, states, loc| {
+            let loc = *loc + sub_loc(states);
+            let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+            let attrs = attrs.current();
+            let buffer = attrs.buffer.take();
+            let damage = std::mem::take(&mut attrs.damage);
+            callbacks.append(&mut attrs.frame_callbacks);
+            let (scale, transform) = (attrs.buffer_scale, attrs.buffer_transform);
+            let mut sync = states.cached_state.get::<DrmSyncobjCachedState>();
+            let sync = sync.current();
+            let (acquire, release) = (sync.acquire_point.take(), sync.release_point.take());
+            let mut vp = states.cached_state.get::<ViewportCachedState>();
+            let vp = vp.current();
+            let size = surface_info(states, |info| {
+                match &buffer {
+                    Some(BufferAssignment::NewBuffer(b)) => {
+                        info.size = buffer::buffer_size(b).map(|bs| {
+                            let s = buffer::logical_size(
+                                bs,
+                                scale,
+                                transform,
+                                vp.dst,
+                                vp.src.map(|r| r.size),
+                            );
+                            (s.w, s.h)
+                        });
+                    }
+                    Some(BufferAssignment::Removed) => info.size = None,
+                    None => {}
+                }
+                info.size
+            });
+            items.push(Item {
+                surface: s.clone(),
+                loc: (loc.x, loc.y),
+                buffer,
+                damage,
+                acquire,
+                release,
+                size,
+            });
+        },
+        |_, _, _| true,
+    );
+
+    (items, callbacks)
 }
 
 fn union(a: Rect, b: Rect) -> Rect {
@@ -945,7 +923,7 @@ fn union(a: Rect, b: Rect) -> Rect {
 }
 
 /// Shows `texture` once the client's GPU work behind `point` has finished.
-fn wait_acquire(sv: &SurfaceView, id: ObjectId, point: DrmSyncPoint, texture: gdk::Texture) {
+fn wait_acquire(sv: &SurfaceView, id: ObjectId, point: &DrmSyncPoint, texture: gdk::Texture) {
     let fd = match point.eventfd() {
         Ok(fd) => fd,
         Err(e) => {
@@ -965,6 +943,69 @@ fn wait_acquire(sv: &SurfaceView, id: ObjectId, point: DrmSyncPoint, texture: gd
         }
         glib::ControlFlow::Break
     });
+}
+
+/// The single fake output every client sees.
+fn new_output(dh: &DisplayHandle) -> Output {
+    let output = Output::new(
+        "HW-EMBED-1".into(),
+        PhysicalProperties {
+            size: (0, 0).into(),
+            subpixel: Subpixel::Unknown,
+            make: "hyprwidget".into(),
+            model: "embed".into(),
+        },
+    );
+    let _ = output.create_global::<State>(dh);
+    let mode = OutputMode {
+        size: (1920, 1080).into(),
+        refresh: 60_000,
+    };
+    output.change_current_state(
+        Some(mode),
+        None,
+        Some(Scale::Integer(1)),
+        Some((0, 0).into()),
+    );
+    output.set_preferred(mode);
+    output
+}
+
+/// `linux-dmabuf` (formats from GDK) and `linux-drm-syncobj` on the
+/// render node, when there is one.
+fn dmabuf_setup(
+    dh: &DisplayHandle,
+    gdk_display: &gdk::Display,
+) -> anyhow::Result<(DmabufState, Option<DmabufGlobal>, Option<DrmSyncobjState>)> {
+    let mut dmabuf = DmabufState::new();
+    let mut dmabuf_global = None;
+    let mut syncobj = None;
+    if let Some(node) = render_node() {
+        let formats = gdk_dmabuf_formats(gdk_display);
+        tracing::info!(node = %node.display(), formats = formats.len(), "dmabuf");
+        let dev = std::fs::metadata(&node)?.rdev();
+        if !formats.is_empty() {
+            let feedback = DmabufFeedbackBuilder::new(dev, formats).build()?;
+            dmabuf_global =
+                Some(dmabuf.create_global_with_default_feedback::<State>(dh, &feedback));
+        }
+        let fd: OwnedFd = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&node)?
+            .into();
+        let drm = DrmDeviceFd::new(DeviceFd::from(fd));
+        if std::env::var_os("HW_EMBED_NO_SYNCOBJ").is_some() {
+            tracing::warn!("HW_EMBED_NO_SYNCOBJ set; linux-drm-syncobj disabled");
+        } else if supports_syncobj_eventfd(&drm) {
+            syncobj = Some(DrmSyncobjState::new::<State>(dh, drm));
+        } else {
+            tracing::warn!("DRM device lacks syncobj eventfd; linux-drm-syncobj disabled");
+        }
+    } else {
+        tracing::warn!("no DRM render node; dmabuf disabled");
+    }
+    Ok((dmabuf, dmabuf_global, syncobj))
 }
 
 fn gdk_dmabuf_formats(display: &gdk::Display) -> Vec<Format> {
@@ -1011,11 +1052,14 @@ impl CompositorHandler for State {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().unwrap().compositor
+        &client
+            .get_data::<ClientState>()
+            .expect("every client is inserted with a ClientState")
+            .compositor
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
-        if let (Some(client), Some(id)) = (surface.client(), self.view_of(surface)) {
+        if let (Some(client), Some(id)) = (surface.client(), view_of(surface)) {
             self.clients.insert(client.id(), id);
         }
     }
@@ -1029,7 +1073,7 @@ impl CompositorHandler for State {
             return;
         }
         let root = root_of(surface);
-        let Some(id) = self.view_of(&root) else {
+        let Some(id) = view_of(&root) else {
             return;
         };
         let top = self.views.get(&id).and_then(|v| {
@@ -1093,7 +1137,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
-        let Some(id) = self.view_of(surface.wl_surface()) else {
+        let Some(id) = view_of(surface.wl_surface()) else {
             return;
         };
         let (Some(server), Some(view)) = (EmbedServer::current(), self.view_widget(id)) else {
@@ -1101,24 +1145,28 @@ impl XdgShellHandler for State {
         };
         let sv = SurfaceView::new(&server, surface.wl_surface());
         // Dialogs keep their own size and are centred over the main window.
-        let dialog = surface.parent().is_some();
-        if dialog {
-            configure_toplevel(&surface, None, false);
+        let kind = if surface.parent().is_some() {
+            configure_toplevel(&surface, None, ToplevelKind::Dialog);
+            ToplevelKind::Dialog
         } else {
-            configure_toplevel(&surface, view.configure_size(), true);
-        }
+            configure_toplevel(&surface, view.configure_size(), ToplevelKind::Main);
+            ToplevelKind::Main
+        };
         self.add_root(surface.wl_surface(), &sv);
         if let Some(slot) = self.views.get_mut(&id) {
             slot.toplevels.push((surface, sv.clone()));
         }
-        view.add_toplevel(&sv, dialog);
+        view.add_toplevel(&sv, kind);
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let Some((id, idx)) = self.toplevel_slot(&surface) else {
             return;
         };
-        let (_, sv) = self.views.get_mut(&id).unwrap().toplevels.remove(idx);
+        let Some(slot) = self.views.get_mut(&id) else {
+            return;
+        };
+        let (_, sv) = slot.toplevels.remove(idx);
         self.remove_root(surface.wl_surface());
         sv.clear();
         if let Some(view) = self.view_widget(id) {
@@ -1135,7 +1183,7 @@ impl XdgShellHandler for State {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
-        self.popup_new(surface, positioner);
+        self.popup_new(&surface, positioner);
     }
 
     fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
@@ -1150,7 +1198,7 @@ impl XdgShellHandler for State {
         positioner: PositionerState,
         token: u32,
     ) {
-        self.popup_reposition(surface, positioner, token);
+        self.popup_reposition(&surface, positioner, token);
     }
 
     fn popup_destroyed(&mut self, surface: PopupSurface) {
@@ -1213,7 +1261,7 @@ impl SeatHandler for State {
     type TouchFocus = WlSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
-        &mut self.seat_state
+        &mut self.seats
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
@@ -1227,9 +1275,11 @@ impl SeatHandler for State {
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         self.cursor_surface = None;
         match image {
-            CursorImageStatus::Hidden => self.set_cursor(gdk::Cursor::from_name("none", None)),
+            CursorImageStatus::Hidden => {
+                self.set_cursor(gdk::Cursor::from_name("none", None).as_ref());
+            }
             CursorImageStatus::Named(icon) => {
-                self.set_cursor(gdk::Cursor::from_name(icon.name(), None))
+                self.set_cursor(gdk::Cursor::from_name(icon.name(), None).as_ref());
             }
             CursorImageStatus::Surface(s) => self.cursor_surface = Some(s),
         }
@@ -1240,13 +1290,11 @@ impl OutputHandler for State {}
 
 impl FractionalScaleHandler for State {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        let scale = self
-            .view_of(&surface)
+        let scale = view_of(&surface)
             .and_then(|id| self.views.get(&id))
-            .map(|v| v.scale)
-            .unwrap_or(1.0);
+            .map_or(1.0, |v| v.scale);
         with_states(&surface, |s| {
-            with_fractional_scale(s, |fs| fs.set_preferred_scale(scale))
+            with_fractional_scale(s, |fs| fs.set_preferred_scale(scale));
         });
     }
 }

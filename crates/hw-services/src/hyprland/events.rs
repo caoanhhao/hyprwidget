@@ -50,7 +50,7 @@ pub mod dirty {
 
 /// What `name` invalidates.
 pub fn affects(name: &str) -> u8 {
-    use dirty::*;
+    use dirty::{ACTIVE_WINDOW, ACTIVE_WORKSPACE, ALL, CLIENTS, MONITORS, WORKSPACES};
     match name {
         "workspace" | "workspacev2" | "focusedmon" | "focusedmonv2" => {
             MONITORS | ACTIVE_WORKSPACE | WORKSPACES
@@ -60,7 +60,8 @@ pub fn affects(name: &str) -> u8 {
             WORKSPACES | MONITORS | ACTIVE_WORKSPACE
         }
         "activespecial" | "activespecialv2" => MONITORS | WORKSPACES,
-        "monitoradded" | "monitoraddedv2" | "monitorremoved" | "monitorremovedv2" => ALL,
+        "monitoradded" | "monitoraddedv2" | "monitorremoved" | "monitorremovedv2"
+        | "configreloaded" => ALL,
         "activewindow" | "activewindowv2" => ACTIVE_WINDOW | ACTIVE_WORKSPACE,
         "openwindow" | "closewindow" | "movewindow" | "movewindowv2" | "kill" => {
             CLIENTS | WORKSPACES | ACTIVE_WINDOW | ACTIVE_WORKSPACE
@@ -69,7 +70,6 @@ pub fn affects(name: &str) -> u8 {
         "fullscreen" => CLIENTS | WORKSPACES | ACTIVE_WINDOW | ACTIVE_WORKSPACE,
         "changefloatingmode" | "pin" | "minimized" | "urgent" | "togglegroup" | "moveintogroup"
         | "moveoutofgroup" => CLIENTS | ACTIVE_WINDOW,
-        "configreloaded" => ALL,
         _ => 0,
     }
 }
@@ -115,7 +115,7 @@ mod tests {
     fn no_data() {
         let e = parse("configreloaded>>");
         assert_eq!(e.name, "configreloaded");
-        assert!(e.args.is_empty());
+        assert_eq!(e.args, Vec::<&str>::new());
         let e = parse("bogus");
         assert_eq!((e.name, e.data), ("bogus", ""));
     }

@@ -1,6 +1,7 @@
 //! The daemon (`hyprwidget run`) and offline commands (`check`, `option`).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
@@ -13,16 +14,17 @@ use hw_ui::style::Styles;
 use hw_ui::watch::{self, Changes};
 
 use crate::convert::LuaResultExt;
-use crate::runtime::{Core, Runtime, Ui};
+use crate::runtime::{Core, HyprOptions, Runtime, Ui};
 
+#[derive(Debug)]
 pub struct App {
     core: Rc<Core>,
     runtime: RefCell<Option<Runtime>>,
     keep: RefCell<Vec<Box<dyn std::any::Any>>>,
     /// A Lua (re)load is running; the CSS is compiled once it is done.
-    loading: std::cell::Cell<bool>,
+    loading: Cell<bool>,
     /// A generated partial changed while loading.
-    css_dirty: std::cell::Cell<bool>,
+    css_dirty: Cell<bool>,
 }
 
 /// Writes `_hw-theme.scss`; returns whether it changed.
@@ -40,11 +42,9 @@ fn write_theme(core: &Core) -> bool {
     }
 }
 
-fn gen_dir(instance: &str) -> Result<PathBuf> {
-    let base = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    Ok(base.join("hyprwidget").join(instance))
+fn gen_dir(instance: &str) -> PathBuf {
+    let base = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
+    base.join("hyprwidget").join(instance)
 }
 
 /// Runs the GTK main loop. Returns the exit code.
@@ -57,7 +57,7 @@ pub fn run(dir: ConfigDir, instance: String) -> Result<i32> {
     let state: Rc<RefCell<Option<Rc<App>>>> = Rc::default();
     let startup_err: Rc<RefCell<Option<anyhow::Error>>> = Rc::default();
     {
-        let (state, startup_err) = (state.clone(), startup_err.clone());
+        let (state, startup_err) = (Rc::clone(&state), Rc::clone(&startup_err));
         gtk_app.connect_activate(move |gtk_app| {
             match App::start(gtk_app, dir.clone(), &instance) {
                 Ok(app) => {
@@ -77,32 +77,32 @@ pub fn run(dir: ConfigDir, instance: String) -> Result<i32> {
     if let Some(e) = startup_err.borrow_mut().take() {
         return Err(e);
     }
-    Ok(code.get() as i32)
+    Ok(i32::from(code.get()))
 }
 
 impl App {
     fn start(gtk_app: &gtk4::Application, dir: ConfigDir, instance: &str) -> Result<Rc<Self>> {
         let app_cfg = dir.load_app()?;
-        let styles = Styles::new(gen_dir(instance)?, app_cfg.style.clone())?;
+        let styles = Styles::new(gen_dir(instance), app_cfg.style)?;
         let ui = Ui {
             app: gtk_app.clone(),
             styles,
-            windows: Default::default(),
+            windows: hw_ui::windows::Windows::default(),
             monitors: hw_ui::monitors::watch(),
         };
-        let core = Core::new(dir, Some(ui), true)?;
+        let core = Core::new(dir, Some(ui), HyprOptions::Inherit)?;
         let app = Rc::new(Self {
-            core: core.clone(),
+            core: Rc::clone(&core),
             runtime: RefCell::new(None),
             keep: RefCell::new(Vec::new()),
-            loading: Default::default(),
-            css_dirty: Default::default(),
+            loading: Cell::default(),
+            css_dirty: Cell::default(),
         });
         // Keep running without windows (e.g. while the Lua config is broken).
         app.keep(gtk_app.hold());
 
         // Options → `_hypr.scss` + default stylesheet, live.
-        let styles = core.ui().anyhow()?.styles.clone();
+        let styles = Rc::clone(&core.ui().anyhow()?.styles);
         let regen = move |tree: &serde_json::Value| {
             if let Err(e) = styles.set_options(tree) {
                 tracing::error!("default stylesheet: {e:#}");
@@ -115,7 +115,7 @@ impl App {
         // compile happens after the first Lua load).
         let ui = core.ui().anyhow()?;
         ui.styles.set_extra_error_hook(Rc::new(|key, msg| {
-            crate::plugin::notify(&format!("hyprwidget: {key} stylesheet failed"), msg)
+            crate::plugin::notify(&format!("hyprwidget: {key} stylesheet failed"), msg);
         }));
         write_theme(&core);
         for sig in [core.theme.name.clone(), core.theme.colors.clone()] {
@@ -138,7 +138,7 @@ impl App {
 
         let weak = Rc::downgrade(&app);
         let server = ipc::Server::start(instance, move |req, reply| match weak.upgrade() {
-            Some(app) => app.handle(req, reply),
+            Some(app) => app.handle(&req, reply),
             None => reply.send(Response::err("shutting down")),
         })?;
         tracing::info!(socket = %server.path().display(), "listening");
@@ -217,7 +217,7 @@ impl App {
         self.core
             .options
             .set_user(serde_json::json!({}), Vec::new());
-        let rt = match Runtime::new(self.core.clone()) {
+        let rt = match Runtime::new(Rc::clone(&self.core)) {
             Ok(rt) => rt,
             Err(e) => {
                 tracing::error!("{e:#}");
@@ -245,7 +245,7 @@ impl App {
         }
     }
 
-    fn handle(self: &Rc<Self>, req: Request, reply: Reply) {
+    fn handle(self: &Rc<Self>, req: &Request, reply: Reply) {
         let arg = |i: usize| req.args.get(i).cloned().unwrap_or_default();
         let resp = match req.cmd.as_str() {
             "request" => {
@@ -269,7 +269,7 @@ impl App {
                 // Reply first: reloading may take a while and runs Lua.
                 let what = arg(0);
                 reply.send(Response::ok(""));
-                let app = self.clone();
+                let app = Rc::clone(self);
                 glib::idle_add_local_once(move || match what.as_str() {
                     "css" => app.reload_css(),
                     "lua" => {
@@ -305,15 +305,16 @@ impl App {
                 let mut out = String::new();
                 if let Some(ui) = &self.core.ui {
                     for (name, visible) in ui.windows.list() {
-                        out.push_str(&format!(
-                            "{name}\t{}\n",
+                        let _ = writeln!(
+                            out,
+                            "{name}\t{}",
                             if visible { "visible" } else { "hidden" }
-                        ));
+                        );
                     }
                 }
                 if let Some(rt) = self.runtime.borrow().as_ref() {
                     for r in rt.request_names() {
-                        out.push_str(&format!("request:{r}\n"));
+                        let _ = writeln!(out, "request:{r}");
                     }
                 }
                 Response::ok(out.trim_end())
@@ -358,7 +359,7 @@ impl App {
             } else {
                 " "
             };
-            out.push_str(&format!("{mark} {t}\n"));
+            let _ = writeln!(out, "{mark} {t}");
         }
         if cur.is_null() {
             out.push_str("* none\n");
@@ -373,7 +374,7 @@ fn scopeguard(f: impl FnOnce()) -> impl Drop {
     impl<F: FnOnce()> Drop for G<F> {
         fn drop(&mut self) {
             if let Some(f) = self.0.take() {
-                f()
+                f();
             }
         }
     }
@@ -393,8 +394,8 @@ pub fn format_option(v: &serde_json::Value) -> String {
 
 /// Loads the config without GTK (for `check` and offline `option`).
 fn headless(dir: ConfigDir) -> Result<(Rc<Core>, Runtime, Option<String>)> {
-    let core = Core::new(dir, None, true)?;
-    let rt = Runtime::new(core.clone())?;
+    let core = Core::new(dir, None, HyprOptions::Inherit)?;
+    let rt = Runtime::new(Rc::clone(&core))?;
     let err = rt.load().err().map(|e| format!("{e:#}"));
     Ok((core, rt, err))
 }
@@ -415,7 +416,7 @@ pub fn check(dir: ConfigDir) -> Result<Vec<String>> {
         problems.push(format!("{e:#}"));
         return Ok(problems);
     }
-    let (core, rt, err) = headless(dir.clone())?;
+    let (core, rt, err) = headless(dir)?;
     if let Some(e) = err {
         problems.push(crate::runtime::compact_error(&e));
     }
@@ -466,7 +467,7 @@ pub fn check(dir: ConfigDir) -> Result<Vec<String>> {
 
     // Every plugin.json / theme.json (also the disabled ones) and the
     // stylesheets of the loaded plugins.
-    for f in crate::plugin::discover(&dir.root) {
+    for f in crate::plugin::discover(&core.dir.root) {
         if let Err(e) = f.manifest {
             problems.extend(e);
         } else if let Ok(m) = f.manifest.as_ref()
@@ -480,7 +481,7 @@ pub fn check(dir: ConfigDir) -> Result<Vec<String>> {
             }
         }
     }
-    problems.extend(crate::theme::check_all(&dir.root));
+    problems.extend(crate::theme::check_all(&core.dir.root));
     let mut seen = std::collections::HashSet::new();
     problems.retain(|p| seen.insert(p.clone()));
     let _ = std::fs::remove_dir_all(&gen_tmp);

@@ -20,8 +20,8 @@ fn config_dir(name: &str, files: &[(&str, &str)]) -> ConfigDir {
 }
 
 fn load(dir: ConfigDir) -> (Rc<Core>, Runtime) {
-    let core = Core::new(dir, None, false).unwrap();
-    let rt = Runtime::new(core.clone()).unwrap();
+    let core = Core::new(dir, None, crate::runtime::HyprOptions::Ignore).unwrap();
+    let rt = Runtime::new(Rc::clone(&core)).unwrap();
     rt.load().unwrap();
     (core, rt)
 }
@@ -168,9 +168,9 @@ fn plugin_widgets_services_requests_and_require() {
     assert_eq!(rt.eval("hw.service.clock_svc.setup_ran").unwrap(), "clock");
     assert!(rt.request_names().contains(&"clock_now".to_string()));
     let out = Rc::new(std::cell::RefCell::new(None));
-    let o = out.clone();
+    let o = Rc::clone(&out);
     rt.request("clock_now", &["a".into()], move |ok, s| {
-        *o.borrow_mut() = Some((ok, s))
+        *o.borrow_mut() = Some((ok, s));
     });
     assert_eq!(*out.borrow(), Some((true, "now:a".to_string())));
     assert_eq!(rt.eval("hw.plugins.list()[1]").unwrap(), "clock");
@@ -399,7 +399,7 @@ fn theme_selection_switching_and_sources() {
         core.theme.source_names().is_empty(),
         "Lua source removed with its state"
     );
-    let rt = Runtime::new(core.clone()).unwrap();
+    let rt = Runtime::new(Rc::clone(&core)).unwrap();
     rt.load().unwrap();
     assert_eq!(rt.eval("hw.theme.name:get()").unwrap(), "wall");
     rt.eval("hw.theme.set(nil)").unwrap();
@@ -409,12 +409,12 @@ fn theme_selection_switching_and_sources() {
     rt.eval("hw.theme.set('wall')").unwrap();
     drop(rt);
     std::fs::write(dir.root.join("config.json"), r#"{ "theme": "nord" }"#).unwrap();
-    let rt = Runtime::new(core.clone()).unwrap();
+    let rt = Runtime::new(Rc::clone(&core)).unwrap();
     rt.load().unwrap();
     assert_eq!(rt.eval("hw.theme.name:get()").unwrap(), "wall");
     drop(rt);
     std::fs::write(dir.root.join("config.json"), r#"{ "theme": null }"#).unwrap();
-    let rt = Runtime::new(core.clone()).unwrap();
+    let rt = Runtime::new(core).unwrap();
     rt.load().unwrap();
     assert_eq!(rt.eval("hw.theme.name:get()").unwrap(), "nil");
 }

@@ -25,6 +25,7 @@ pub trait Source {
 }
 
 /// Signal holding Lua values (`hw.state`, `hw.computed`, `s:map`).
+#[derive(Debug)]
 pub struct LuaValueSource(pub Signal<Value>);
 
 impl Source for LuaValueSource {
@@ -49,6 +50,15 @@ pub type JsonSetter = Rc<dyn Fn(serde_json::Value) -> anyhow::Result<()>>;
 /// Signal holding JSON (options, settings).
 pub struct JsonSource(pub Signal<serde_json::Value>, pub Option<JsonSetter>);
 
+impl std::fmt::Debug for JsonSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JsonSource")
+            .field("signal", &self.0)
+            .field("writable", &self.1.is_some())
+            .finish()
+    }
+}
+
 impl Source for JsonSource {
     fn get(&self, lua: &Lua) -> Result<Value> {
         self.0.with(|v| json_to_lua(lua, v))
@@ -68,6 +78,7 @@ impl Source for JsonSource {
 }
 
 /// `hw.monitors`.
+#[derive(Debug)]
 pub struct MonitorsSource(pub Signal<Vec<MonitorInfo>>);
 
 impl Source for MonitorsSource {
@@ -97,6 +108,12 @@ impl Source for MonitorsSource {
 #[derive(Clone)]
 pub struct LuaSignal(pub Rc<dyn Source>);
 
+impl std::fmt::Debug for LuaSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LuaSignal").finish_non_exhaustive()
+    }
+}
+
 impl LuaSignal {
     pub fn state(v: Value) -> Self {
         Self(Rc::new(LuaValueSource(Signal::new(v))))
@@ -115,9 +132,10 @@ impl LuaSignal {
     }
 
     /// `s:map(fn)`.
+    #[must_use]
     pub fn map(&self, lua: &Lua, f: Function) -> Self {
         let weak = lua.weak();
-        let src = self.0.clone();
+        let src = Rc::clone(&self.0);
         Self(Rc::new(LuaValueSource(computed(move || {
             let Some(lua) = weak.try_upgrade() else {
                 return Value::Nil;
@@ -162,7 +180,7 @@ impl UserData for LuaSignal {
         m.add_method("map", |lua, this, f: Function| Ok(this.map(lua, f)));
         m.add_method("subscribe", |lua, this, f: Function| {
             let weak = lua.weak();
-            let src = this.0.clone();
+            let src = Rc::clone(&this.0);
             let sub = this.0.subscribe(Box::new(move || {
                 let Some(lua) = weak.try_upgrade() else {
                     return;
@@ -188,7 +206,7 @@ impl UserData for LuaSignal {
         m.add_meta_method(MetaMethod::Call, |lua, this, ()| this.0.get(lua));
         m.add_meta_method(MetaMethod::ToString, |lua, this, ()| {
             let v = hw_core::reactive::untracked(|| this.0.get(lua))?;
-            Ok(format!("Signal({})", crate::convert::display(lua, v)))
+            Ok(format!("Signal({})", crate::convert::display(lua, &v)))
         });
     }
 }

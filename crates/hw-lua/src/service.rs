@@ -29,7 +29,7 @@ pub struct Services(RefCell<HashMap<String, Rc<Service>>>);
 impl Services {
     pub fn get(&self, name: &str) -> Result<Option<Rc<Service>>> {
         if let Some(s) = self.0.borrow().get(name) {
-            return Ok(Some(s.clone()));
+            return Ok(Some(Rc::clone(s)));
         }
         let Some(started) = hw_services::start(name) else {
             return Ok(None);
@@ -37,7 +37,7 @@ impl Services {
         let svc = started
             .map_err(|e| mlua::Error::runtime(format!("starting service '{name}': {e:#}")))?;
         tracing::info!(service = name, "service started");
-        self.0.borrow_mut().insert(name.to_owned(), svc.clone());
+        self.0.borrow_mut().insert(name.to_owned(), Rc::clone(&svc));
         Ok(Some(svc))
     }
 }
@@ -46,13 +46,25 @@ impl Services {
 #[derive(Clone)]
 pub struct LuaService(pub Rc<Service>);
 
+impl std::fmt::Debug for Services {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_set().entries(self.0.borrow().keys()).finish()
+    }
+}
+
+impl std::fmt::Debug for LuaService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LuaService").finish_non_exhaustive()
+    }
+}
+
 impl LuaService {
     fn index(&self, lua: &Lua, key: &str) -> Result<Value> {
         if let Some(sig) = self.0.prop(key) {
             return lua.pack(LuaSignal::json(sig.clone(), None));
         }
         if self.0.has_method(key) {
-            let svc = self.0.clone();
+            let svc = Rc::clone(&self.0);
             let name = key.to_owned();
             let f = lua.create_function(move |lua, args: Variadic<Value>| {
                 // Called as `svc:method(...)`: drop `self`.

@@ -14,6 +14,7 @@ use smithay::input::touch::{DownEvent, MotionEvent as TouchMotion, UpEvent};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
 
+use crate::cast;
 use crate::server::{EmbedServer, State, surface_under};
 
 /// Keymap and repeat settings, read from Hyprland's `input:*` options so
@@ -64,7 +65,11 @@ impl KeyboardConfig {
                 .filter(|s| !s.is_empty() && s != "[[EMPTY]]")
         };
         let int = |name: &str| {
-            get(name).and_then(|v| v.get("int").and_then(|i| i.as_i64()).map(|i| i as i32))
+            get(name).and_then(|v| {
+                v.get("int")
+                    .and_then(serde_json::Value::as_i64)
+                    .and_then(|i| i32::try_from(i).ok())
+            })
         };
         c.rules = text("input:kb_rules").unwrap_or_default();
         c.model = text("input:kb_model").unwrap_or_default();
@@ -90,8 +95,20 @@ pub(crate) struct KeyLookup {
     syms: HashMap<u32, Vec<u32>>,
 }
 
+/// A touch point event, in tree coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Touch {
+    Down(f64, f64),
+    Motion(f64, f64),
+    Up,
+}
+
 /// Modifiers GDK says are held (ctrl, shift, alt, logo).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent modifier flags, mirroring smithay's ModifiersState"
+)]
 pub(crate) struct Mods {
     pub ctrl: bool,
     pub shift: bool,
@@ -187,7 +204,7 @@ impl EmbedServer {
     pub(crate) fn pointer_motion(&self, root: WlSurface, x: f64, y: f64, time: u32) {
         self.run(move |st| {
             let focus = surface_under(&root, (x, y))
-                .map(|(s, (lx, ly))| (s, (lx as f64, ly as f64).into()));
+                .map(|(s, (lx, ly))| (s, (f64::from(lx), f64::from(ly)).into()));
             st.pointer_root = Some(root);
             let ptr = st.pointer.clone();
             ptr.motion(
@@ -224,7 +241,13 @@ impl EmbedServer {
         });
     }
 
-    pub(crate) fn pointer_button(&self, _root: WlSurface, button: u32, pressed: bool, time: u32) {
+    pub(crate) fn pointer_button(
+        &self,
+        _root: WlSurface,
+        button: u32,
+        state: ButtonState,
+        time: u32,
+    ) {
         self.run(move |st| {
             let ptr = st.pointer.clone();
             ptr.button(
@@ -233,49 +256,49 @@ impl EmbedServer {
                     serial: SERIAL_COUNTER.next_serial(),
                     time,
                     button,
-                    state: if pressed {
-                        ButtonState::Pressed
-                    } else {
-                        ButtonState::Released
-                    },
+                    state,
                 },
             );
             ptr.frame(st);
         });
     }
 
-    /// `wheel`: `dx`/`dy` are notches (discrete + v120); otherwise smooth
-    /// touchpad deltas. `stop` ends a kinetic touchpad scroll.
+    /// `AxisSource::Wheel`: `dx`/`dy` are notches (discrete + v120);
+    /// otherwise smooth touchpad deltas.
     pub(crate) fn pointer_axis(
         &self,
         _root: WlSurface,
         dx: f64,
         dy: f64,
-        wheel: bool,
-        stop: bool,
+        source: AxisSource,
         time: u32,
     ) {
         self.run(move |st| {
-            let mut frame = AxisFrame::new(time).source(if wheel {
-                AxisSource::Wheel
-            } else {
-                AxisSource::Finger
-            });
-            if stop {
-                frame = frame.stop(Axis::Horizontal).stop(Axis::Vertical);
-            } else {
-                for (axis, d) in [(Axis::Horizontal, dx), (Axis::Vertical, dy)] {
-                    if d == 0.0 {
-                        continue;
-                    }
-                    if wheel {
-                        // One notch = 15 (libinput's degrees) / 120 v120 units.
-                        frame = frame.value(axis, d * 15.0).v120(axis, (d * 120.0) as i32);
-                    } else {
-                        frame = frame.value(axis, d);
-                    }
+            let mut frame = AxisFrame::new(time).source(source);
+            for (axis, d) in [(Axis::Horizontal, dx), (Axis::Vertical, dy)] {
+                if d == 0.0 {
+                    continue;
+                }
+                if source == AxisSource::Wheel {
+                    // One notch = 15 (libinput's degrees) / 120 v120 units.
+                    frame = frame.value(axis, d * 15.0).v120(axis, cast::px(d * 120.0));
+                } else {
+                    frame = frame.value(axis, d);
                 }
             }
+            let ptr = st.pointer.clone();
+            ptr.axis(st, frame);
+            ptr.frame(st);
+        });
+    }
+
+    /// Ends a kinetic touchpad scroll.
+    pub(crate) fn pointer_axis_stop(&self, _root: WlSurface, time: u32) {
+        self.run(move |st| {
+            let frame = AxisFrame::new(time)
+                .source(AxisSource::Finger)
+                .stop(Axis::Horizontal)
+                .stop(Axis::Vertical);
             let ptr = st.pointer.clone();
             ptr.axis(st, frame);
             ptr.frame(st);
@@ -290,31 +313,22 @@ impl EmbedServer {
         keycode: u32,
         keyval: (u32, u32),
         mods: Option<Mods>,
-        pressed: bool,
+        state: KeyState,
         time: u32,
     ) {
         self.run(move |st| {
             let keycode = st.key_lookup.remap(keycode, keyval.0, keyval.1);
             let kb = st.keyboard.clone();
-            if pressed && kb.current_focus().as_ref() != Some(&root) {
+            if state == KeyState::Pressed && kb.current_focus().as_ref() != Some(&root) {
                 kb.set_focus(st, Some(root), SERIAL_COUNTER.next_serial());
             }
             if let Some(m) = mods {
                 st.sync_mods(m, time);
             }
             let serial = SERIAL_COUNTER.next_serial();
-            kb.input::<(), _>(
-                st,
-                Keycode::new(keycode),
-                if pressed {
-                    KeyState::Pressed
-                } else {
-                    KeyState::Released
-                },
-                serial,
-                time,
-                |_, _, _| FilterResult::Forward,
-            );
+            kb.input::<(), _>(st, Keycode::new(keycode), state, serial, time, |_, _, _| {
+                FilterResult::Forward
+            });
         });
     }
 
@@ -337,23 +351,15 @@ impl EmbedServer {
         });
     }
 
-    /// `pos = Some` with `down` → touch down, `Some` → motion, `None` → up.
-    pub(crate) fn touch(
-        &self,
-        root: WlSurface,
-        slot: i32,
-        pos: Option<(f64, f64)>,
-        down: bool,
-        time: u32,
-    ) {
+    pub(crate) fn touch(&self, root: WlSurface, slot: u32, event: Touch, time: u32) {
         self.run(move |st| {
             let touch = st.touch.clone();
-            let slot = Some(slot as u32).into();
-            match pos {
-                Some((x, y)) => {
+            let slot = Some(slot).into();
+            match event {
+                Touch::Down(x, y) | Touch::Motion(x, y) => {
                     let focus = surface_under(&root, (x, y))
-                        .map(|(s, (lx, ly))| (s, (lx as f64, ly as f64).into()));
-                    if down {
+                        .map(|(s, (lx, ly))| (s, (f64::from(lx), f64::from(ly)).into()));
+                    if matches!(event, Touch::Down(..)) {
                         touch.down(
                             st,
                             focus,
@@ -376,7 +382,7 @@ impl EmbedServer {
                         );
                     }
                 }
-                None => touch.up(
+                Touch::Up => touch.up(
                     st,
                     &UpEvent {
                         slot,

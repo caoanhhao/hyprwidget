@@ -163,7 +163,7 @@ impl AppConfig {
             style: str_key("style", "style/main.scss")?,
             layer_rules: obj
                 .get("layer_rules")
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true),
             options: crate::options::expand_keys(&serde_json::Value::Object(options)),
             hypr_custom_dir: str_key("hypr_custom_dir", "~/.config/hypr/config/custom")?,

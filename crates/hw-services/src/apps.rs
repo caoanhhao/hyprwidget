@@ -81,7 +81,7 @@ pub fn start() -> Result<Rc<Service>> {
 
     let svc = Rc::new_cyclic(|weak: &std::rc::Weak<Service>| {
         let mut svc = Service::new("apps", PROPS);
-        let (s, w) = (st.clone(), weak.clone());
+        let (s, w) = (Rc::clone(&st), std::rc::Weak::clone(weak));
         svc.method("reload", move |_| {
             reload(&s);
             if let Some(svc) = w.upgrade() {
@@ -89,29 +89,33 @@ pub fn start() -> Result<Rc<Service>> {
             }
             Ok(Value::Null)
         });
-        let s = st.clone();
+        let s = Rc::clone(&st);
         svc.method("query", move |args| {
             let text = arg_str(&args, 0, "text").unwrap_or_default();
-            let limit = arg_f64(&args, 1, "limit").map(|n| n as usize).ok();
+            let limit = arg_f64(&args, 1, "limit")
+                .map(crate::num::f64_to_usize)
+                .ok();
             Ok(serde_json::to_value(query(
                 &mut s.borrow_mut(),
                 &text,
                 limit,
-                false,
+                Match::Fuzzy,
             ))?)
         });
-        let s = st.clone();
+        let s = Rc::clone(&st);
         svc.method("exact_query", move |args| {
             let text = arg_str(&args, 0, "text").unwrap_or_default();
-            let limit = arg_f64(&args, 1, "limit").map(|n| n as usize).ok();
+            let limit = arg_f64(&args, 1, "limit")
+                .map(crate::num::f64_to_usize)
+                .ok();
             Ok(serde_json::to_value(query(
                 &mut s.borrow_mut(),
                 &text,
                 limit,
-                true,
+                Match::Exact,
             ))?)
         });
-        let s = st.clone();
+        let s = Rc::clone(&st);
         svc.method("get", move |args| {
             let id = arg_str(&args, 0, "id")?;
             let st = s.borrow();
@@ -120,7 +124,7 @@ pub fn start() -> Result<Rc<Service>> {
                 .transpose()?
                 .unwrap_or(Value::Null))
         });
-        let (s, w) = (st.clone(), weak.clone());
+        let (s, w) = (Rc::clone(&st), std::rc::Weak::clone(weak));
         svc.method("launch", move |args| {
             let id = match args.first() {
                 Some(Value::Object(o)) => o
@@ -200,8 +204,8 @@ fn reload(st: &RefCell<State>) {
         apps.push(App {
             id: e.id().to_owned(),
             name: name.into_owned(),
-            generic_name: e.generic_name(&locales).map(|s| s.into_owned()),
-            description: e.comment(&locales).map(|s| s.into_owned()),
+            generic_name: e.generic_name(&locales).map(std::borrow::Cow::into_owned),
+            description: e.comment(&locales).map(std::borrow::Cow::into_owned),
             icon: e.icon().map(str::to_owned),
             exec: e.parse_exec().unwrap_or_default(),
             terminal: e.terminal(),
@@ -217,7 +221,7 @@ fn reload(st: &RefCell<State>) {
                 .unwrap_or_default()
                 .into_iter()
                 .filter(|k| !k.is_empty())
-                .map(|k| k.into_owned())
+                .map(std::borrow::Cow::into_owned)
                 .collect(),
             wm_class: e.startup_wm_class().map(str::to_owned),
             path: e.path.clone(),
@@ -228,15 +232,23 @@ fn reload(st: &RefCell<State>) {
     st.borrow_mut().apps = apps;
 }
 
-/// Fuzzy (or substring when `exact`) search over name, generic name,
+/// How [`query`] matches its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Match {
+    Fuzzy,
+    /// Case-insensitive substring.
+    Exact,
+}
+
+/// Fuzzy (or substring with [`Match::Exact`]) search over name, generic name,
 /// keywords and id; ties and near-ties favour often-launched apps. Empty
 /// text lists apps by frequency.
-fn query(st: &mut State, text: &str, limit: Option<usize>, exact: bool) -> Vec<App> {
+fn query(st: &mut State, text: &str, limit: Option<usize>, mode: Match) -> Vec<App> {
     let text = text.trim();
     let mut scored: Vec<(u32, &App)> = if text.is_empty() {
         st.apps.iter().map(|a| (0, a)).collect()
     } else {
-        let pat = if exact {
+        let pat = if mode == Match::Exact {
             Pattern::new(
                 text,
                 CaseMatching::Ignore,
@@ -267,10 +279,10 @@ fn query(st: &mut State, text: &str, limit: Option<usize>, exact: bool) -> Vec<A
             })
             .collect()
     };
-    let bonus = |a: &App| (a.frequency.min(50) * 4) as i64;
+    let bonus = |a: &App| i64::from(a.frequency.min(50) * 4);
     scored.sort_by(|(sa, a), (sb, b)| {
-        (*sb as i64 + bonus(b))
-            .cmp(&(*sa as i64 + bonus(a)))
+        (i64::from(*sb) + bonus(b))
+            .cmp(&(i64::from(*sa) + bonus(a)))
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     scored
@@ -283,8 +295,7 @@ fn query(st: &mut State, text: &str, limit: Option<usize>, exact: bool) -> Vec<A
 fn record_launch(st: &mut State, id: &str) {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let u = st.store.usage.entry(id.to_owned()).or_default();
     u.count += 1;
     u.last = now;
@@ -416,12 +427,12 @@ mod tests {
             app("kitty", "kitty", 0),
         ]);
         let ids = |v: Vec<App>| v.into_iter().map(|a| a.id).collect::<Vec<_>>();
-        assert_eq!(ids(query(&mut st, "ffx", None, false)), ["firefox"]);
-        assert_eq!(ids(query(&mut st, "kit", None, true)), ["kitty"]);
-        assert!(query(&mut st, "zzz", None, false).is_empty());
+        assert_eq!(ids(query(&mut st, "ffx", None, Match::Fuzzy)), ["firefox"]);
+        assert_eq!(ids(query(&mut st, "kit", None, Match::Exact)), ["kitty"]);
+        assert!(query(&mut st, "zzz", None, Match::Fuzzy).is_empty());
         // Empty text: everything, most used first.
         record_launch(&mut st, "kitty");
-        assert_eq!(ids(query(&mut st, "", Some(1), false)), ["kitty"]);
+        assert_eq!(ids(query(&mut st, "", Some(1), Match::Fuzzy)), ["kitty"]);
         assert_eq!(st.store.history, ["kitty"]);
         let _ = std::fs::remove_file(&st.store_path);
     }

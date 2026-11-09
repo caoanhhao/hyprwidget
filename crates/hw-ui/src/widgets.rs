@@ -10,6 +10,8 @@ use gtk4::prelude::*;
 use gtk4::{gdk, glib, pango};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
+use crate::num::{non_negative, saturating_i32};
+
 /// A property value coming from Lua/JSON.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Prop {
@@ -31,13 +33,13 @@ impl Prop {
         match self {
             Prop::Num(n) => Some(*n),
             Prop::Str(s) => s.trim().trim_end_matches("px").parse().ok(),
-            Prop::Bool(b) => Some(*b as i32 as f64),
+            Prop::Bool(b) => Some(f64::from(u8::from(*b))),
             _ => None,
         }
     }
 
     pub fn as_i32(&self) -> Option<i32> {
-        self.as_f64().map(|f| f.round() as i32)
+        self.as_f64().map(|f| saturating_i32(f.round()))
     }
 
     pub fn as_str(&self) -> Option<&str> {
@@ -52,7 +54,9 @@ impl Prop {
         match self {
             Prop::Nil => String::new(),
             Prop::Bool(b) => b.to_string(),
-            Prop::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
+            Prop::Num(n) if n.fract() == 0.0 && n.abs() < 1e15 => {
+                format!("{}", crate::num::saturating_i64(*n))
+            }
             Prop::Num(n) => n.to_string(),
             Prop::Str(s) => s.clone(),
             Prop::List(l) => l.iter().map(Prop::to_text).collect::<Vec<_>>().join(" "),
@@ -232,9 +236,7 @@ pub fn create(kind: Kind) -> gtk4::Widget {
     };
     if kind == Kind::Box {
         // Orientation defaults; `vertical = true` flips it.
-        w.downcast_ref::<gtk4::Box>()
-            .unwrap()
-            .set_orientation(Horizontal);
+        cast::<gtk4::Box>(&w).set_orientation(Horizontal);
     }
     let _ = Vertical;
     // Without a theme nothing sizes these; keep them at natural height
@@ -253,6 +255,12 @@ pub fn create_window(app: &gtk4::Application) -> gtk4::ApplicationWindow {
     w.set_layer(Layer::Top);
     w.add_css_class("hw-window");
     w
+}
+
+/// Downcasts `w` to the GTK type of its [`Kind`].
+fn cast<T: IsA<gtk4::Widget>>(w: &gtk4::Widget) -> &T {
+    w.downcast_ref::<T>()
+        .expect("widget kind matches its GTK type")
 }
 
 fn err(kind: Kind, name: &str, v: &Prop) -> String {
@@ -331,131 +339,93 @@ const USER_CLASSES: &str = "hw-user-classes";
 
 fn set_classes(w: &gtk4::Widget, v: &Prop) {
     // SAFETY: the key is only ever used with `Vec<String>`.
-    unsafe {
-        if let Some(old) = w.steal_data::<Vec<String>>(USER_CLASSES) {
-            for c in old {
-                w.remove_css_class(&c);
-            }
-        }
-        let new = v.words();
-        for c in &new {
-            w.add_css_class(c);
-        }
-        w.set_data(USER_CLASSES, new);
+    let old = unsafe { w.steal_data::<Vec<String>>(USER_CLASSES) };
+    for c in old.into_iter().flatten() {
+        w.remove_css_class(&c);
     }
+    let new = v.words();
+    for c in &new {
+        w.add_css_class(c);
+    }
+    // SAFETY: as above.
+    unsafe { w.set_data(USER_CLASSES, new) };
 }
 
-/// Sets `name` on a widget of `kind`. Unknown names fall back to a GObject
+/// Sets `name` on a widget of `kind`. Unknown names fall back to a `GObject`
 /// property of the same name (with `_` → `-`).
 pub fn set_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(), String> {
     let bad = || err(kind, name, v);
     let num = || v.as_f64().ok_or_else(bad);
     let int = || v.as_i32().ok_or_else(bad);
-    let s = || v.as_str().ok_or_else(bad);
+    let text = || v.as_str().ok_or_else(bad);
 
     // Common to all widgets.
     match name {
         "class" | "class_name" => set_classes(w, v),
         "visible" if kind == Kind::Window => {
-            let win = w.downcast_ref::<gtk4::Window>().unwrap();
+            let win = cast::<gtk4::Window>(w);
             if v.truthy() {
-                crate::windows::present(win)
+                crate::windows::present(win);
             } else {
-                win.set_visible(false)
+                win.set_visible(false);
             }
         }
         "visible" => w.set_visible(v.truthy()),
         "tooltip" | "tooltip_text" => {
-            w.set_tooltip_text(Some(v.to_text().as_str()).filter(|t| !t.is_empty()))
+            w.set_tooltip_text(Some(v.to_text().as_str()).filter(|t| !t.is_empty()));
         }
         "tooltip_markup" => w.set_tooltip_markup(Some(&v.to_text())),
         "sensitive" => w.set_sensitive(v.truthy()),
         "hexpand" => w.set_hexpand(v.truthy()),
         "vexpand" => w.set_vexpand(v.truthy()),
-        "halign" => w.set_halign(align(s()?).ok_or_else(bad)?),
-        "valign" => w.set_valign(align(s()?).ok_or_else(bad)?),
+        "halign" => w.set_halign(align(text()?).ok_or_else(bad)?),
+        "valign" => w.set_valign(align(text()?).ok_or_else(bad)?),
         "width" | "width_request" if kind != Kind::DrawingArea => w.set_width_request(int()?),
         "height" | "height_request" if kind != Kind::DrawingArea => w.set_height_request(int()?),
         "opacity" => w.set_opacity(num()?),
         "focusable" | "can_focus" => w.set_focusable(v.truthy()),
         "can_target" => w.set_can_target(v.truthy()),
         "cursor" => w.set_cursor_from_name(v.as_str()),
-        "widget_name" => w.set_widget_name(s()?),
+        "widget_name" => w.set_widget_name(text()?),
         "margin" if kind != Kind::Window => {
-            let [t, r, b, l] = sides(v).ok_or_else(bad)?;
-            w.set_margin_top(t);
-            w.set_margin_end(r);
-            w.set_margin_bottom(b);
-            w.set_margin_start(l);
+            let [top, right, bottom, left] = sides(v).ok_or_else(bad)?;
+            w.set_margin_top(top);
+            w.set_margin_end(right);
+            w.set_margin_bottom(bottom);
+            w.set_margin_start(left);
         }
         _ => return set_kind_prop(w, kind, name, v),
     }
     Ok(())
 }
 
-/// Kind-specific part of [`set_prop`].
+/// Kind-specific part of [`set_prop`] for windows, layout and display widgets.
 fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(), String> {
     let bad = || err(kind, name, v);
     let num = || v.as_f64().ok_or_else(bad);
     let int = || v.as_i32().ok_or_else(bad);
-    let s = || v.as_str().ok_or_else(bad);
+    let text = || v.as_str().ok_or_else(bad);
 
     match (kind, name) {
         (Kind::Window, _) => {
-            return set_window_prop(w.downcast_ref().unwrap(), name, v).map_err(|_| bad());
+            return set_window_prop(cast(w), name, v).map_err(|()| bad());
         }
         (Kind::App, _) => return crate::app::set_prop(w, name, v),
 
-        (Kind::Box, "vertical") => w
-            .downcast_ref::<gtk4::Box>()
-            .unwrap()
-            .set_orientation(orientation(v)),
-        (Kind::Box, "spacing") => w.downcast_ref::<gtk4::Box>().unwrap().set_spacing(int()?),
-        (Kind::Box, "homogeneous") => w
-            .downcast_ref::<gtk4::Box>()
-            .unwrap()
-            .set_homogeneous(v.truthy()),
-        (Kind::CenterBox, "vertical") => w
-            .downcast_ref::<gtk4::CenterBox>()
-            .unwrap()
-            .set_orientation(orientation(v)),
+        (Kind::Box, "vertical") => cast::<gtk4::Box>(w).set_orientation(orientation(v)),
+        (Kind::Box, "spacing") => cast::<gtk4::Box>(w).set_spacing(int()?),
+        (Kind::Box, "homogeneous") => cast::<gtk4::Box>(w).set_homogeneous(v.truthy()),
+        (Kind::CenterBox, "vertical") => cast::<gtk4::CenterBox>(w).set_orientation(orientation(v)),
 
-        (Kind::Label, "label" | "text") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_label(&v.to_text()),
-        (Kind::Label, "markup") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_markup(&v.to_text()),
-        (Kind::Label, "use_markup") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_use_markup(v.truthy()),
-        (Kind::Label, "wrap") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_wrap(v.truthy()),
-        (Kind::Label, "xalign") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_xalign(num()? as f32),
-        (Kind::Label, "yalign") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_yalign(num()? as f32),
-        (Kind::Label, "max_width_chars") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_max_width_chars(int()?),
-        (Kind::Label, "width_chars") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_width_chars(int()?),
-        (Kind::Label, "selectable") => w
-            .downcast_ref::<gtk4::Label>()
-            .unwrap()
-            .set_selectable(v.truthy()),
+        (Kind::Label, "label" | "text") => cast::<gtk4::Label>(w).set_label(&v.to_text()),
+        (Kind::Label, "markup") => cast::<gtk4::Label>(w).set_markup(&v.to_text()),
+        (Kind::Label, "use_markup") => cast::<gtk4::Label>(w).set_use_markup(v.truthy()),
+        (Kind::Label, "wrap") => cast::<gtk4::Label>(w).set_wrap(v.truthy()),
+        (Kind::Label, "xalign") => cast::<gtk4::Label>(w).set_xalign(crate::num::to_f32(num()?)),
+        (Kind::Label, "yalign") => cast::<gtk4::Label>(w).set_yalign(crate::num::to_f32(num()?)),
+        (Kind::Label, "max_width_chars") => cast::<gtk4::Label>(w).set_max_width_chars(int()?),
+        (Kind::Label, "width_chars") => cast::<gtk4::Label>(w).set_width_chars(int()?),
+        (Kind::Label, "selectable") => cast::<gtk4::Label>(w).set_selectable(v.truthy()),
         (Kind::Label, "ellipsize") => {
             let mode = match v {
                 Prop::Bool(true) => pango::EllipsizeMode::End,
@@ -469,280 +439,222 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
                 },
                 _ => return Err(bad()),
             };
-            w.downcast_ref::<gtk4::Label>().unwrap().set_ellipsize(mode)
+            cast::<gtk4::Label>(w).set_ellipsize(mode);
         }
         (Kind::Label, "justify") => {
-            let j = match s()? {
+            let j = match text()? {
                 "left" => gtk4::Justification::Left,
                 "right" => gtk4::Justification::Right,
                 "center" => gtk4::Justification::Center,
                 "fill" => gtk4::Justification::Fill,
                 _ => return Err(bad()),
             };
-            w.downcast_ref::<gtk4::Label>().unwrap().set_justify(j)
+            cast::<gtk4::Label>(w).set_justify(j);
         }
 
-        (Kind::Button, "label") => w
-            .downcast_ref::<gtk4::Button>()
-            .unwrap()
-            .set_label(&v.to_text()),
-        (Kind::Button, "icon") => w
-            .downcast_ref::<gtk4::Button>()
-            .unwrap()
-            .set_icon_name(s()?),
-        (Kind::Button, "has_frame") => w
-            .downcast_ref::<gtk4::Button>()
-            .unwrap()
-            .set_has_frame(v.truthy()),
+        (Kind::Button, "label") => cast::<gtk4::Button>(w).set_label(&v.to_text()),
+        (Kind::Button, "icon") => cast::<gtk4::Button>(w).set_icon_name(text()?),
+        (Kind::Button, "has_frame") => cast::<gtk4::Button>(w).set_has_frame(v.truthy()),
 
-        (Kind::Image | Kind::Icon, "icon" | "icon_name") => w
-            .downcast_ref::<gtk4::Image>()
-            .unwrap()
-            .set_icon_name(v.as_str()),
-        (Kind::Image, "file") => w
-            .downcast_ref::<gtk4::Image>()
-            .unwrap()
-            .set_from_file(v.as_str()),
+        (Kind::Image | Kind::Icon, "icon" | "icon_name") => {
+            cast::<gtk4::Image>(w).set_icon_name(v.as_str());
+        }
+        (Kind::Image, "file") => cast::<gtk4::Image>(w).set_from_file(v.as_str()),
         // Scaled image; `content_fit` ("cover", "contain"…) and `can_shrink`
         // go through the GObject fallback.
-        (Kind::Picture, "file") => w
-            .downcast_ref::<gtk4::Picture>()
-            .unwrap()
-            .set_filename(v.as_str().filter(|s| !s.is_empty())),
-        (Kind::Image | Kind::Icon, "pixel_size" | "size") => w
-            .downcast_ref::<gtk4::Image>()
-            .unwrap()
-            .set_pixel_size(int()?),
+        (Kind::Picture, "file") => {
+            cast::<gtk4::Picture>(w).set_filename(v.as_str().filter(|s| !s.is_empty()));
+        }
+        (Kind::Image | Kind::Icon, "pixel_size" | "size") => {
+            cast::<gtk4::Image>(w).set_pixel_size(int()?);
+        }
 
-        (Kind::Revealer, "reveal" | "reveal_child") => w
-            .downcast_ref::<gtk4::Revealer>()
-            .unwrap()
-            .set_reveal_child(v.truthy()),
-        (Kind::Revealer, "transition") => w
-            .downcast_ref::<gtk4::Revealer>()
-            .unwrap()
-            .set_transition_type(revealer_transition(s()?).ok_or_else(bad)?),
-        (Kind::Revealer, "duration" | "transition_duration") => w
-            .downcast_ref::<gtk4::Revealer>()
-            .unwrap()
-            .set_transition_duration(int()?.max(0) as u32),
+        _ => return set_container_prop(w, kind, name, v),
+    }
+    Ok(())
+}
+
+/// Kind-specific part of [`set_prop`] for containers.
+fn set_container_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(), String> {
+    let bad = || err(kind, name, v);
+    let int = || v.as_i32().ok_or_else(bad);
+    let text = || v.as_str().ok_or_else(bad);
+
+    match (kind, name) {
+        (Kind::Revealer, "reveal" | "reveal_child") => {
+            cast::<gtk4::Revealer>(w).set_reveal_child(v.truthy());
+        }
+        (Kind::Revealer, "transition") => cast::<gtk4::Revealer>(w)
+            .set_transition_type(revealer_transition(text()?).ok_or_else(bad)?),
+        (Kind::Revealer, "duration" | "transition_duration") => {
+            cast::<gtk4::Revealer>(w).set_transition_duration(non_negative(int()?));
+        }
 
         (Kind::Stack, "shown" | "visible_child_name") => {
-            let st = w.downcast_ref::<gtk4::Stack>().unwrap();
-            if st.child_by_name(s()?).is_some() {
-                st.set_visible_child_name(s()?);
+            let st = cast::<gtk4::Stack>(w);
+            if st.child_by_name(text()?).is_some() {
+                st.set_visible_child_name(text()?);
             }
         }
-        (Kind::Stack, "transition") => w
-            .downcast_ref::<gtk4::Stack>()
-            .unwrap()
-            .set_transition_type(stack_transition(s()?).ok_or_else(bad)?),
-        (Kind::Stack, "duration" | "transition_duration") => w
-            .downcast_ref::<gtk4::Stack>()
-            .unwrap()
-            .set_transition_duration(int()?.max(0) as u32),
-        (Kind::Stack, "hhomogeneous") => w
-            .downcast_ref::<gtk4::Stack>()
-            .unwrap()
-            .set_hhomogeneous(v.truthy()),
-        (Kind::Stack, "vhomogeneous") => w
-            .downcast_ref::<gtk4::Stack>()
-            .unwrap()
-            .set_vhomogeneous(v.truthy()),
+        (Kind::Stack, "transition") => {
+            cast::<gtk4::Stack>(w).set_transition_type(stack_transition(text()?).ok_or_else(bad)?);
+        }
+        (Kind::Stack, "duration" | "transition_duration") => {
+            cast::<gtk4::Stack>(w).set_transition_duration(non_negative(int()?));
+        }
+        (Kind::Stack, "hhomogeneous") => cast::<gtk4::Stack>(w).set_hhomogeneous(v.truthy()),
+        (Kind::Stack, "vhomogeneous") => cast::<gtk4::Stack>(w).set_vhomogeneous(v.truthy()),
 
         (Kind::Scrolled, "hscroll" | "vscroll") => {
-            let sw = w.downcast_ref::<gtk4::ScrolledWindow>().unwrap();
-            let p = policy(s()?).ok_or_else(bad)?;
+            let sw = cast::<gtk4::ScrolledWindow>(w);
+            let p = policy(text()?).ok_or_else(bad)?;
             let (h, vp) = sw.policy();
             if name == "hscroll" {
-                sw.set_policy(p, vp)
+                sw.set_policy(p, vp);
             } else {
-                sw.set_policy(h, p)
+                sw.set_policy(h, p);
             }
         }
-        (Kind::Scrolled, "propagate_natural_width") => w
-            .downcast_ref::<gtk4::ScrolledWindow>()
-            .unwrap()
-            .set_propagate_natural_width(v.truthy()),
-        (Kind::Scrolled, "propagate_natural_height") => w
-            .downcast_ref::<gtk4::ScrolledWindow>()
-            .unwrap()
-            .set_propagate_natural_height(v.truthy()),
+        (Kind::Scrolled, "propagate_natural_width") => {
+            cast::<gtk4::ScrolledWindow>(w).set_propagate_natural_width(v.truthy());
+        }
+        (Kind::Scrolled, "propagate_natural_height") => {
+            cast::<gtk4::ScrolledWindow>(w).set_propagate_natural_height(v.truthy());
+        }
 
+        (Kind::Grid, "row_spacing") => cast::<gtk4::Grid>(w).set_row_spacing(non_negative(int()?)),
+        (Kind::Grid, "column_spacing" | "spacing") => {
+            let g = cast::<gtk4::Grid>(w);
+            g.set_column_spacing(non_negative(int()?));
+            if name == "spacing" {
+                g.set_row_spacing(non_negative(int()?));
+            }
+        }
+        (Kind::Grid, "homogeneous") => {
+            let g = cast::<gtk4::Grid>(w);
+            g.set_row_homogeneous(v.truthy());
+            g.set_column_homogeneous(v.truthy());
+        }
+        (Kind::Grid, "columns") => {} // used by set_children
+
+        (Kind::FlowBox, "max_per_line" | "max_children_per_line") => {
+            cast::<gtk4::FlowBox>(w).set_max_children_per_line(non_negative(int()?.max(1)));
+        }
+        (Kind::FlowBox, "min_per_line" | "min_children_per_line") => {
+            cast::<gtk4::FlowBox>(w).set_min_children_per_line(non_negative(int()?.max(1)));
+        }
+        (Kind::FlowBox, "homogeneous") => cast::<gtk4::FlowBox>(w).set_homogeneous(v.truthy()),
+        (Kind::FlowBox, "spacing") => {
+            let f = cast::<gtk4::FlowBox>(w);
+            f.set_row_spacing(non_negative(int()?));
+            f.set_column_spacing(non_negative(int()?));
+        }
+        _ => return set_control_prop(w, kind, name, v),
+    }
+    Ok(())
+}
+
+/// Kind-specific part of [`set_prop`] for inputs and the rest.
+fn set_control_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(), String> {
+    let bad = || err(kind, name, v);
+    let num = || v.as_f64().ok_or_else(bad);
+    let int = || v.as_i32().ok_or_else(bad);
+    let text = || v.as_str().ok_or_else(bad);
+
+    match (kind, name) {
         (Kind::Entry, "text") => {
-            let e = w.downcast_ref::<gtk4::Entry>().unwrap();
+            let e = cast::<gtk4::Entry>(w);
             let t = v.to_text();
             if e.text() != t {
                 e.set_text(&t);
             }
         }
         // Cursor position; -1 = end of text.
-        (Kind::Entry, "position" | "cursor_position") => w
-            .downcast_ref::<gtk4::Entry>()
-            .unwrap()
-            .set_position(int()?),
-        (Kind::Entry, "placeholder" | "placeholder_text") => w
-            .downcast_ref::<gtk4::Entry>()
-            .unwrap()
-            .set_placeholder_text(v.as_str()),
-        (Kind::Entry, "password") => w
-            .downcast_ref::<gtk4::Entry>()
-            .unwrap()
-            .set_visibility(!v.truthy()),
+        (Kind::Entry, "position" | "cursor_position") => {
+            cast::<gtk4::Entry>(w).set_position(int()?);
+        }
+        (Kind::Entry, "placeholder" | "placeholder_text") => {
+            cast::<gtk4::Entry>(w).set_placeholder_text(v.as_str());
+        }
+        (Kind::Entry, "password") => cast::<gtk4::Entry>(w).set_visibility(!v.truthy()),
 
         (Kind::Slider, "value") => {
-            let sc = w.downcast_ref::<gtk4::Scale>().unwrap();
+            let sc = cast::<gtk4::Scale>(w);
             if (sc.value() - num()?).abs() > f64::EPSILON {
                 sc.set_value(num()?);
             }
         }
         (Kind::Slider, "min") => {
-            let sc = w.downcast_ref::<gtk4::Scale>().unwrap();
+            let sc = cast::<gtk4::Scale>(w);
             sc.set_range(num()?, sc.adjustment().upper());
         }
         (Kind::Slider, "max") => {
-            let sc = w.downcast_ref::<gtk4::Scale>().unwrap();
+            let sc = cast::<gtk4::Scale>(w);
             sc.set_range(sc.adjustment().lower(), num()?);
         }
-        (Kind::Slider, "step") => w
-            .downcast_ref::<gtk4::Scale>()
-            .unwrap()
-            .set_increments(num()?, num()? * 10.0),
-        (Kind::Slider, "draw_value") => w
-            .downcast_ref::<gtk4::Scale>()
-            .unwrap()
-            .set_draw_value(v.truthy()),
-        (Kind::Slider, "digits") => w.downcast_ref::<gtk4::Scale>().unwrap().set_digits(int()?),
-        (Kind::Slider, "vertical") => w
-            .downcast_ref::<gtk4::Scale>()
-            .unwrap()
-            .set_orientation(orientation(v)),
-        (Kind::Slider, "inverted") => w
-            .downcast_ref::<gtk4::Scale>()
-            .unwrap()
-            .set_inverted(v.truthy()),
+        (Kind::Slider, "step") => cast::<gtk4::Scale>(w).set_increments(num()?, num()? * 10.0),
+        (Kind::Slider, "draw_value") => cast::<gtk4::Scale>(w).set_draw_value(v.truthy()),
+        (Kind::Slider, "digits") => cast::<gtk4::Scale>(w).set_digits(int()?),
+        (Kind::Slider, "vertical") => cast::<gtk4::Scale>(w).set_orientation(orientation(v)),
+        (Kind::Slider, "inverted") => cast::<gtk4::Scale>(w).set_inverted(v.truthy()),
 
         (Kind::Switch, "active") => {
-            let sw = w.downcast_ref::<gtk4::Switch>().unwrap();
+            let sw = cast::<gtk4::Switch>(w);
             if sw.is_active() != v.truthy() {
                 sw.set_active(v.truthy());
             }
         }
 
-        (Kind::Progress, "value" | "fraction") => w
-            .downcast_ref::<gtk4::ProgressBar>()
-            .unwrap()
-            .set_fraction(num()?.clamp(0.0, 1.0)),
-        (Kind::Progress, "vertical") => w
-            .downcast_ref::<gtk4::ProgressBar>()
-            .unwrap()
-            .set_orientation(orientation(v)),
-        (Kind::Progress, "inverted") => w
-            .downcast_ref::<gtk4::ProgressBar>()
-            .unwrap()
-            .set_inverted(v.truthy()),
+        (Kind::Progress, "value" | "fraction") => {
+            cast::<gtk4::ProgressBar>(w).set_fraction(num()?.clamp(0.0, 1.0));
+        }
+        (Kind::Progress, "vertical") => {
+            cast::<gtk4::ProgressBar>(w).set_orientation(orientation(v));
+        }
+        (Kind::Progress, "inverted") => cast::<gtk4::ProgressBar>(w).set_inverted(v.truthy()),
         (Kind::Progress, "text") => {
-            let p = w.downcast_ref::<gtk4::ProgressBar>().unwrap();
+            let p = cast::<gtk4::ProgressBar>(w);
             p.set_text(Some(&v.to_text()));
             p.set_show_text(true);
         }
 
-        (Kind::Grid, "row_spacing") => w
-            .downcast_ref::<gtk4::Grid>()
-            .unwrap()
-            .set_row_spacing(int()?.max(0) as u32),
-        (Kind::Grid, "column_spacing" | "spacing") => {
-            let g = w.downcast_ref::<gtk4::Grid>().unwrap();
-            g.set_column_spacing(int()?.max(0) as u32);
-            if name == "spacing" {
-                g.set_row_spacing(int()?.max(0) as u32);
-            }
+        (Kind::MenuButton, "label") => cast::<gtk4::MenuButton>(w).set_label(&v.to_text()),
+        (Kind::MenuButton, "icon") => cast::<gtk4::MenuButton>(w).set_icon_name(text()?),
+        (Kind::MenuButton, "always_show_arrow") => {
+            cast::<gtk4::MenuButton>(w).set_always_show_arrow(v.truthy());
         }
-        (Kind::Grid, "homogeneous") => {
-            let g = w.downcast_ref::<gtk4::Grid>().unwrap();
-            g.set_row_homogeneous(v.truthy());
-            g.set_column_homogeneous(v.truthy());
-        }
-        (Kind::Grid, "columns") => {} // used by set_children
+        (Kind::MenuButton, "active") => cast::<gtk4::MenuButton>(w).set_active(v.truthy()),
 
-        (Kind::FlowBox, "max_per_line" | "max_children_per_line") => w
-            .downcast_ref::<gtk4::FlowBox>()
-            .unwrap()
-            .set_max_children_per_line(int()?.max(1) as u32),
-        (Kind::FlowBox, "min_per_line" | "min_children_per_line") => w
-            .downcast_ref::<gtk4::FlowBox>()
-            .unwrap()
-            .set_min_children_per_line(int()?.max(1) as u32),
-        (Kind::FlowBox, "homogeneous") => w
-            .downcast_ref::<gtk4::FlowBox>()
-            .unwrap()
-            .set_homogeneous(v.truthy()),
-        (Kind::FlowBox, "spacing") => {
-            let f = w.downcast_ref::<gtk4::FlowBox>().unwrap();
-            f.set_row_spacing(int()?.max(0) as u32);
-            f.set_column_spacing(int()?.max(0) as u32);
-        }
-
-        (Kind::MenuButton, "label") => w
-            .downcast_ref::<gtk4::MenuButton>()
-            .unwrap()
-            .set_label(&v.to_text()),
-        (Kind::MenuButton, "icon") => w
-            .downcast_ref::<gtk4::MenuButton>()
-            .unwrap()
-            .set_icon_name(s()?),
-        (Kind::MenuButton, "always_show_arrow") => w
-            .downcast_ref::<gtk4::MenuButton>()
-            .unwrap()
-            .set_always_show_arrow(v.truthy()),
-        (Kind::MenuButton, "active") => w
-            .downcast_ref::<gtk4::MenuButton>()
-            .unwrap()
-            .set_active(v.truthy()),
-
-        (Kind::Popover, "has_arrow") => w
-            .downcast_ref::<gtk4::Popover>()
-            .unwrap()
-            .set_has_arrow(v.truthy()),
-        (Kind::Popover, "autohide") => w
-            .downcast_ref::<gtk4::Popover>()
-            .unwrap()
-            .set_autohide(v.truthy()),
+        (Kind::Popover, "has_arrow") => cast::<gtk4::Popover>(w).set_has_arrow(v.truthy()),
+        (Kind::Popover, "autohide") => cast::<gtk4::Popover>(w).set_autohide(v.truthy()),
         (Kind::Popover, "open") => {
-            let p = w.downcast_ref::<gtk4::Popover>().unwrap();
+            let p = cast::<gtk4::Popover>(w);
             if v.truthy() { p.popup() } else { p.popdown() }
         }
 
-        (Kind::DrawingArea, "width" | "content_width") => w
-            .downcast_ref::<gtk4::DrawingArea>()
-            .unwrap()
-            .set_content_width(int()?),
-        (Kind::DrawingArea, "height" | "content_height") => w
-            .downcast_ref::<gtk4::DrawingArea>()
-            .unwrap()
-            .set_content_height(int()?),
+        (Kind::DrawingArea, "width" | "content_width") => {
+            cast::<gtk4::DrawingArea>(w).set_content_width(int()?);
+        }
+        (Kind::DrawingArea, "height" | "content_height") => {
+            cast::<gtk4::DrawingArea>(w).set_content_height(int()?);
+        }
         (Kind::DrawingArea, "redraw") => w.queue_draw(),
 
         (Kind::Calendar, "date") => {
-            let parts: Vec<i32> = s()?.split('-').filter_map(|p| p.parse().ok()).collect();
-            let [y, m, d] = parts[..] else {
+            let parts: Vec<i32> = text()?.split('-').filter_map(|p| p.parse().ok()).collect();
+            let [year, month, day] = parts[..] else {
                 return Err(bad());
             };
-            let dt = glib::DateTime::from_local(y, m, d, 0, 0, 0.0).map_err(|_| bad())?;
-            w.downcast_ref::<gtk4::Calendar>().unwrap().select_day(&dt);
+            let dt = glib::DateTime::from_local(year, month, day, 0, 0, 0.0).map_err(|_| bad())?;
+            cast::<gtk4::Calendar>(w).select_day(&dt);
         }
-        (Kind::Calendar, "show_heading") => w
-            .downcast_ref::<gtk4::Calendar>()
-            .unwrap()
-            .set_show_heading(v.truthy()),
-        (Kind::Calendar, "show_day_names") => w
-            .downcast_ref::<gtk4::Calendar>()
-            .unwrap()
-            .set_show_day_names(v.truthy()),
-        (Kind::Calendar, "show_week_numbers") => w
-            .downcast_ref::<gtk4::Calendar>()
-            .unwrap()
-            .set_show_week_numbers(v.truthy()),
+        (Kind::Calendar, "show_heading") => cast::<gtk4::Calendar>(w).set_show_heading(v.truthy()),
+        (Kind::Calendar, "show_day_names") => {
+            cast::<gtk4::Calendar>(w).set_show_day_names(v.truthy());
+        }
+        (Kind::Calendar, "show_week_numbers") => {
+            cast::<gtk4::Calendar>(w).set_show_week_numbers(v.truthy());
+        }
 
         (Kind::Terminal, _) if crate::terminal::set_prop(w, name, v)? => {}
 
@@ -751,7 +663,7 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
     Ok(())
 }
 
-/// Fallback: set a GObject property by name.
+/// Fallback: set a `GObject` property by name.
 fn set_gobject_prop(obj: &glib::Object, kind: Kind, name: &str, v: &Prop) -> Result<(), String> {
     let pname = name.replace('_', "-");
     let Some(pspec) = obj.find_property(&pname) else {
@@ -768,11 +680,11 @@ pub fn prop_to_value(v: &Prop, ty: glib::Type) -> Option<glib::Value> {
     Some(match ty {
         t if t == glib::Type::BOOL => v.truthy().to_value(),
         t if t == glib::Type::I32 => v.as_i32()?.to_value(),
-        t if t == glib::Type::U32 => (v.as_i32()?.max(0) as u32).to_value(),
-        t if t == glib::Type::I64 => (v.as_f64()? as i64).to_value(),
-        t if t == glib::Type::U64 => (v.as_f64()?.max(0.0) as u64).to_value(),
+        t if t == glib::Type::U32 => non_negative(v.as_i32()?).to_value(),
+        t if t == glib::Type::I64 => crate::num::saturating_i64(v.as_f64()?).to_value(),
+        t if t == glib::Type::U64 => crate::num::saturating_u64(v.as_f64()?.max(0.0)).to_value(),
         t if t == glib::Type::F64 => v.as_f64()?.to_value(),
-        t if t == glib::Type::F32 => (v.as_f64()? as f32).to_value(),
+        t if t == glib::Type::F32 => crate::num::to_f32(v.as_f64()?).to_value(),
         t if t == glib::Type::STRING => v.to_text().to_value(),
         t if t.is_a(glib::Type::ENUM) => {
             let class = glib::EnumClass::with_type(t)?;
@@ -797,13 +709,20 @@ pub fn value_to_prop(v: &glib::Value) -> Prop {
         return s.map_or(Prop::Nil, Prop::Str);
     }
     macro_rules! num {
-        ($($t:ty),*) => {$(
+        ($($t:ty => $to_f64:path),*) => {$(
             if let Ok(n) = v.get::<$t>() {
-                return Prop::Num(n as f64);
+                return Prop::Num($to_f64(n));
             }
         )*};
     }
-    num!(i32, u32, i64, u64, f64, f32);
+    num!(
+        i32 => f64::from,
+        u32 => f64::from,
+        i64 => crate::num::i64_to_f64,
+        u64 => crate::num::u64_to_f64,
+        f64 => f64::from,
+        f32 => f64::from
+    );
     if let Some(ev) = glib::EnumValue::from_value(v) {
         return Prop::Str(ev.1.nick().replace('-', "_"));
     }
@@ -815,7 +734,7 @@ pub fn sides(v: &Prop) -> Option<[i32; 4]> {
     match v {
         Prop::Num(_) | Prop::Str(_) => {
             let n: Vec<i32> = match v {
-                Prop::Num(n) => vec![n.round() as i32],
+                Prop::Num(n) => vec![saturating_i32(n.round())],
                 Prop::Str(s) => s
                     .split_whitespace()
                     .map(|p| p.trim_end_matches("px").parse().ok())
@@ -833,8 +752,8 @@ pub fn sides(v: &Prop) -> Option<[i32; 4]> {
     }
 }
 
-fn from_list(n: &[i32]) -> Option<[i32; 4]> {
-    Some(match *n {
+fn from_list(list: &[i32]) -> Option<[i32; 4]> {
+    Some(match *list {
         [a] => [a; 4],
         [a, b] => [a, b, a, b],
         [a, b, c] => [a, b, c, b],
@@ -872,11 +791,11 @@ fn set_window_prop(w: &gtk4::Window, name: &str, v: &Prop) -> Result<(), ()> {
         },
         "exclusive_zone" => w.set_exclusive_zone(v.as_i32().ok_or(())?),
         "margin" => {
-            let [t, r, b, l] = sides(v).ok_or(())?;
-            w.set_margin(Edge::Top, t);
-            w.set_margin(Edge::Right, r);
-            w.set_margin(Edge::Bottom, b);
-            w.set_margin(Edge::Left, l);
+            let [top, right, bottom, left] = sides(v).ok_or(())?;
+            w.set_margin(Edge::Top, top);
+            w.set_margin(Edge::Right, right);
+            w.set_margin(Edge::Bottom, bottom);
+            w.set_margin(Edge::Left, left);
         }
         "keymode" | "keyboard_mode" => w.set_keyboard_mode(match v.as_str().ok_or(())? {
             "none" => KeyboardMode::None,
@@ -923,46 +842,30 @@ pub fn set_slot(
     child: Option<&gtk4::Widget>,
 ) -> Result<(), String> {
     match (kind, slot) {
-        (Kind::Window, "child") => w.downcast_ref::<gtk4::Window>().unwrap().set_child(child),
-        (Kind::Button, "child") => w.downcast_ref::<gtk4::Button>().unwrap().set_child(child),
-        (Kind::Revealer, "child") => w.downcast_ref::<gtk4::Revealer>().unwrap().set_child(child),
-        (Kind::Scrolled, "child") => w
-            .downcast_ref::<gtk4::ScrolledWindow>()
-            .unwrap()
-            .set_child(child),
-        (Kind::Popover, "child") => w.downcast_ref::<gtk4::Popover>().unwrap().set_child(child),
-        (Kind::Overlay, "child") => w.downcast_ref::<gtk4::Overlay>().unwrap().set_child(child),
-        (Kind::MenuButton, "child") => w
-            .downcast_ref::<gtk4::MenuButton>()
-            .unwrap()
-            .set_child(child),
+        (Kind::Window, "child") => cast::<gtk4::Window>(w).set_child(child),
+        (Kind::Button, "child") => cast::<gtk4::Button>(w).set_child(child),
+        (Kind::Revealer, "child") => cast::<gtk4::Revealer>(w).set_child(child),
+        (Kind::Scrolled, "child") => cast::<gtk4::ScrolledWindow>(w).set_child(child),
+        (Kind::Popover, "child") => cast::<gtk4::Popover>(w).set_child(child),
+        (Kind::Overlay, "child") => cast::<gtk4::Overlay>(w).set_child(child),
+        (Kind::MenuButton, "child") => cast::<gtk4::MenuButton>(w).set_child(child),
         (Kind::MenuButton, "popover") => {
             let p = child
                 .map(|c| c.clone().downcast::<gtk4::Popover>())
                 .transpose()
                 .map_err(|_| "MenuButton.popover must be a W.Popover".to_string())?;
-            w.downcast_ref::<gtk4::MenuButton>()
-                .unwrap()
-                .set_popover(p.as_ref())
+            cast::<gtk4::MenuButton>(w).set_popover(p.as_ref());
         }
-        (Kind::CenterBox, "start") => w
-            .downcast_ref::<gtk4::CenterBox>()
-            .unwrap()
-            .set_start_widget(child),
-        (Kind::CenterBox, "center") => w
-            .downcast_ref::<gtk4::CenterBox>()
-            .unwrap()
-            .set_center_widget(child),
-        (Kind::CenterBox, "end") => w
-            .downcast_ref::<gtk4::CenterBox>()
-            .unwrap()
-            .set_end_widget(child),
+        (Kind::CenterBox, "start") => cast::<gtk4::CenterBox>(w).set_start_widget(child),
+        (Kind::CenterBox, "center") => cast::<gtk4::CenterBox>(w).set_center_widget(child),
+        (Kind::CenterBox, "end") => cast::<gtk4::CenterBox>(w).set_end_widget(child),
         _ => return Err(format!("{} has no '{slot}' slot", kind.name())),
     }
     Ok(())
 }
 
 /// A child of a multi-child container with its layout metadata.
+#[derive(Debug)]
 pub struct Child {
     pub widget: gtk4::Widget,
     /// Stack page name.
@@ -977,23 +880,21 @@ pub fn clear_children(w: &gtk4::Widget, kind: Kind) {
     while let Some(child) = c {
         c = child.next_sibling();
         match kind {
-            Kind::Box => w.downcast_ref::<gtk4::Box>().unwrap().remove(&child),
-            Kind::Grid => w.downcast_ref::<gtk4::Grid>().unwrap().remove(&child),
-            Kind::FlowBox => w.downcast_ref::<gtk4::FlowBox>().unwrap().remove(&child),
-            Kind::Stack => {
-                // Stack's internal children are pages; remove via the model.
-            }
+            Kind::Box => cast::<gtk4::Box>(w).remove(&child),
+            Kind::Grid => cast::<gtk4::Grid>(w).remove(&child),
+            Kind::FlowBox => cast::<gtk4::FlowBox>(w).remove(&child),
             Kind::Overlay => {
-                let o = w.downcast_ref::<gtk4::Overlay>().unwrap();
+                let o = cast::<gtk4::Overlay>(w);
                 if o.child().as_ref() != Some(&child) {
                     o.remove_overlay(&child);
                 }
             }
+            // Stack's internal children are pages; removed below.
             _ => {}
         }
     }
     if kind == Kind::Stack {
-        let st = w.downcast_ref::<gtk4::Stack>().unwrap();
+        let st = cast::<gtk4::Stack>(w);
         while let Some(c) = st.first_child() {
             st.remove(&c);
         }
@@ -1009,27 +910,19 @@ pub fn add_children(
 ) -> Result<(), String> {
     for (i, ch) in children.into_iter().enumerate() {
         match kind {
-            Kind::Box => w.downcast_ref::<gtk4::Box>().unwrap().append(&ch.widget),
-            Kind::FlowBox => w
-                .downcast_ref::<gtk4::FlowBox>()
-                .unwrap()
-                .append(&ch.widget),
-            Kind::Overlay => w
-                .downcast_ref::<gtk4::Overlay>()
-                .unwrap()
-                .add_overlay(&ch.widget),
+            Kind::Box => cast::<gtk4::Box>(w).append(&ch.widget),
+            Kind::FlowBox => cast::<gtk4::FlowBox>(w).append(&ch.widget),
+            Kind::Overlay => cast::<gtk4::Overlay>(w).add_overlay(&ch.widget),
             Kind::Stack => {
-                let st = w.downcast_ref::<gtk4::Stack>().unwrap();
+                let st = cast::<gtk4::Stack>(w);
                 let name = ch.name.unwrap_or_else(|| i.to_string());
                 st.add_named(&ch.widget, Some(&name));
             }
             Kind::Grid => {
                 let cols = columns.unwrap_or(1).max(1);
-                let i = i as i32;
+                let i = i32::try_from(i).map_err(|_| "Grid: too many children".to_string())?;
                 let (c, r, cw, rh) = ch.cell.unwrap_or((i % cols, i / cols, 1, 1));
-                w.downcast_ref::<gtk4::Grid>()
-                    .unwrap()
-                    .attach(&ch.widget, c, r, cw, rh);
+                cast::<gtk4::Grid>(w).attach(&ch.widget, c, r, cw, rh);
             }
             _ => return Err(format!("{} does not take children", kind.name())),
         }
@@ -1084,8 +977,9 @@ fn mods(state: gdk::ModifierType) -> Vec<&'static str> {
     m
 }
 
-fn stop(b: bool) -> glib::Propagation {
-    if b {
+/// Runs `h`; its result decides whether the event propagates.
+fn dispatch(h: &Handler, e: Event) -> glib::Propagation {
+    if h(e) {
         glib::Propagation::Stop
     } else {
         glib::Propagation::Proceed
@@ -1112,34 +1006,10 @@ pub const EVENTS: &[&str] = &[
 /// Connects `on_*` handlers.
 pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Result<(), String> {
     match name {
-        "on_click" => {
-            if let Some(b) = w.downcast_ref::<gtk4::Button>() {
-                let h2 = h.clone();
-                b.connect_clicked(move |_| {
-                    h2(Event::Click { button: 1 });
-                });
-                // Secondary/middle clicks on buttons.
-                let g = gtk4::GestureClick::builder().button(0).build();
-                g.connect_released(move |g, _, _, _| {
-                    let button = g.current_button();
-                    if button != 1 {
-                        h(Event::Click { button });
-                    }
-                });
-                w.add_controller(g);
-            } else {
-                let g = gtk4::GestureClick::builder().button(0).build();
-                g.connect_released(move |g, _, _, _| {
-                    h(Event::Click {
-                        button: g.current_button(),
-                    });
-                });
-                w.add_controller(g);
-            }
-        }
+        "on_click" => connect_click(w, h),
         "on_scroll" => {
             let c = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::BOTH_AXES);
-            c.connect_scroll(move |_, dx, dy| stop(h(Event::Scroll { dx, dy })));
+            c.connect_scroll(move |_, dx, dy| dispatch(&h, Event::Scroll { dx, dy }));
             w.add_controller(c);
         }
         "on_hover" | "on_leave" | "on_motion" => {
@@ -1167,83 +1037,23 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
             let c = gtk4::EventControllerKey::new();
             c.connect_key_pressed(move |_, key, code, state| {
                 let name = key.name().map(|n| n.to_string()).unwrap_or_default();
-                stop(h(Event::Key {
-                    name,
-                    code,
-                    mods: mods(state),
-                }))
+                dispatch(
+                    &h,
+                    Event::Key {
+                        name,
+                        code,
+                        mods: mods(state),
+                    },
+                )
             });
             w.add_controller(c);
         }
-        "on_change" => match kind {
-            Kind::Entry => {
-                w.downcast_ref::<gtk4::Entry>()
-                    .unwrap()
-                    .connect_changed(move |e| {
-                        h(Event::Value(Prop::Str(e.text().into())));
-                    });
-            }
-            Kind::Slider => {
-                w.downcast_ref::<gtk4::Scale>()
-                    .unwrap()
-                    .connect_value_changed(move |s| {
-                        h(Event::Value(Prop::Num(s.value())));
-                    });
-            }
-            Kind::Switch => {
-                w.downcast_ref::<gtk4::Switch>()
-                    .unwrap()
-                    .connect_active_notify(move |s| {
-                        h(Event::Value(Prop::Bool(s.is_active())));
-                    });
-            }
-            Kind::Stack => {
-                w.downcast_ref::<gtk4::Stack>()
-                    .unwrap()
-                    .connect_visible_child_name_notify(move |s| {
-                        h(Event::Value(
-                            s.visible_child_name()
-                                .map_or(Prop::Nil, |n| Prop::Str(n.into())),
-                        ));
-                    });
-            }
-            Kind::Revealer => {
-                w.downcast_ref::<gtk4::Revealer>()
-                    .unwrap()
-                    .connect_child_revealed_notify(move |r| {
-                        h(Event::Value(Prop::Bool(r.is_child_revealed())));
-                    });
-            }
-            Kind::Calendar => {
-                w.downcast_ref::<gtk4::Calendar>()
-                    .unwrap()
-                    .connect_day_selected(move |c| {
-                        let d = c.date();
-                        let s = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day_of_month());
-                        h(Event::Value(Prop::Str(s)));
-                    });
-            }
-            Kind::Popover => {
-                w.connect_visible_notify(move |p| {
-                    h(Event::Value(Prop::Bool(p.is_visible())));
-                });
-            }
-            Kind::MenuButton => {
-                w.downcast_ref::<gtk4::MenuButton>()
-                    .unwrap()
-                    .connect_active_notify(move |m| {
-                        h(Event::Value(Prop::Bool(m.is_active())));
-                    });
-            }
-            _ => return Err(format!("{} has no on_change", kind.name())),
-        },
+        "on_change" => connect_change(w, kind, h)?,
         "on_activate" => match kind {
             Kind::Entry => {
-                w.downcast_ref::<gtk4::Entry>()
-                    .unwrap()
-                    .connect_activate(move |e| {
-                        h(Event::Value(Prop::Str(e.text().into())));
-                    });
+                cast::<gtk4::Entry>(w).connect_activate(move |e| {
+                    h(Event::Value(Prop::Str(e.text().into())));
+                });
             }
             _ => return Err(format!("{} has no on_activate", kind.name())),
         },
@@ -1277,6 +1087,86 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
     Ok(())
 }
 
+/// `on_click`: every mouse button.
+fn connect_click(w: &gtk4::Widget, h: Handler) {
+    if let Some(b) = w.downcast_ref::<gtk4::Button>() {
+        let h2 = Rc::clone(&h);
+        b.connect_clicked(move |_| {
+            h2(Event::Click { button: 1 });
+        });
+        // Secondary/middle clicks on buttons.
+        let g = gtk4::GestureClick::builder().button(0).build();
+        g.connect_released(move |g, _, _, _| {
+            let button = g.current_button();
+            if button != 1 {
+                h(Event::Click { button });
+            }
+        });
+        w.add_controller(g);
+    } else {
+        let g = gtk4::GestureClick::builder().button(0).build();
+        g.connect_released(move |g, _, _, _| {
+            h(Event::Click {
+                button: g.current_button(),
+            });
+        });
+        w.add_controller(g);
+    }
+}
+
+/// `on_change` with the widget's new value.
+fn connect_change(w: &gtk4::Widget, kind: Kind, h: Handler) -> Result<(), String> {
+    match kind {
+        Kind::Entry => {
+            cast::<gtk4::Entry>(w).connect_changed(move |e| {
+                h(Event::Value(Prop::Str(e.text().into())));
+            });
+        }
+        Kind::Slider => {
+            cast::<gtk4::Scale>(w).connect_value_changed(move |s| {
+                h(Event::Value(Prop::Num(s.value())));
+            });
+        }
+        Kind::Switch => {
+            cast::<gtk4::Switch>(w).connect_active_notify(move |s| {
+                h(Event::Value(Prop::Bool(s.is_active())));
+            });
+        }
+        Kind::Stack => {
+            cast::<gtk4::Stack>(w).connect_visible_child_name_notify(move |s| {
+                h(Event::Value(
+                    s.visible_child_name()
+                        .map_or(Prop::Nil, |n| Prop::Str(n.into())),
+                ));
+            });
+        }
+        Kind::Revealer => {
+            cast::<gtk4::Revealer>(w).connect_child_revealed_notify(move |r| {
+                h(Event::Value(Prop::Bool(r.is_child_revealed())));
+            });
+        }
+        Kind::Calendar => {
+            cast::<gtk4::Calendar>(w).connect_day_selected(move |c| {
+                let d = c.date();
+                let s = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day_of_month());
+                h(Event::Value(Prop::Str(s)));
+            });
+        }
+        Kind::Popover => {
+            w.connect_visible_notify(move |p| {
+                h(Event::Value(Prop::Bool(p.is_visible())));
+            });
+        }
+        Kind::MenuButton => {
+            cast::<gtk4::MenuButton>(w).connect_active_notify(move |m| {
+                h(Event::Value(Prop::Bool(m.is_active())));
+            });
+        }
+        _ => return Err(format!("{} has no on_change", kind.name())),
+    }
+    Ok(())
+}
+
 /// `draw(cr, width, height)`.
 pub type DrawFn = Rc<dyn Fn(&gtk4::cairo::Context, i32, i32)>;
 
@@ -1294,7 +1184,7 @@ pub fn set_draw_func(w: &gtk4::Widget, f: DrawFn) -> Result<(), String> {
             fg.blue().into(),
             fg.alpha().into(),
         );
-        f(cr, width, height)
+        f(cr, width, height);
     });
     Ok(())
 }

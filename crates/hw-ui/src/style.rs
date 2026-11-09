@@ -79,6 +79,18 @@ pub struct Styles {
     extra_error: RefCell<Option<ExtraErrorHook>>,
 }
 
+impl std::fmt::Debug for Styles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Styles")
+            .field("gen_dir", &self.gen_dir)
+            .field("entry", &self.entry)
+            .field("inline_rules", &self.inline_rules)
+            .field("extras", &self.extras)
+            .field("extra_error", &self.extra_error.borrow().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl Styles {
     /// `gen_dir` receives `_hypr.scss`; `entry` is the user's stylesheet.
     pub fn new(gen_dir: PathBuf, entry: PathBuf) -> Result<Rc<Self>> {
@@ -209,13 +221,17 @@ impl Styles {
             .inline_rules
             .borrow()
             .values()
-            .map(|r| format!("{r}\n"))
-            .collect();
+            .fold(String::new(), |mut css, r| {
+                css.push_str(r);
+                css.push('\n');
+                css
+            });
         self.inline.load_from_string(&css);
     }
 }
 
 /// Removes an inline rule on drop.
+#[derive(Debug)]
 pub struct InlineCss {
     styles: std::rc::Weak<Styles>,
     id: u64,

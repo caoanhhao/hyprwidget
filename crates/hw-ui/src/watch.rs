@@ -34,6 +34,7 @@ pub fn classify(path: &Path) -> Changes {
 }
 
 /// Keeps the monitors alive.
+#[derive(Debug)]
 pub struct Watcher {
     _monitors: Vec<gio::FileMonitor>,
 }
@@ -65,8 +66,8 @@ pub fn watch(root: &Path, skip: &[PathBuf], on_change: impl Fn(Changes) + 'stati
                 continue;
             }
         };
-        let pending = pending.clone();
-        let on_change = on_change.clone();
+        let pending = Rc::clone(&pending);
+        let on_change = Rc::clone(&on_change);
         mon.connect_changed(move |_, f, other, ev| {
             use gio::FileMonitorEvent as E;
             if !matches!(
@@ -99,8 +100,8 @@ pub fn watch(root: &Path, skip: &[PathBuf], on_change: impl Fn(Changes) + 'stati
             if let Some(id) = st.1.take() {
                 remove_source(id);
             }
-            let p2 = pending.clone();
-            let cb = on_change.clone();
+            let p2 = Rc::clone(&pending);
+            let cb = Rc::clone(&on_change);
             st.1 = Some(glib::timeout_add_local_once(DEBOUNCE, move || {
                 let changes = {
                     let mut st = p2.borrow_mut();

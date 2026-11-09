@@ -9,7 +9,7 @@
 //! smithay's own `text_input` only forwards to an `input_method_v2`
 //! client, so the protocol is implemented here.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use gtk4::{InputHints, InputPurpose};
 use smithay::reexports::wayland_protocols::wp::text_input::zv3::server::zwp_text_input_manager_v3::{
@@ -44,6 +44,19 @@ impl TextInputState {
 /// Double-buffered state of one `zwp_text_input_v3`.
 #[derive(Default)]
 pub(crate) struct TextInputData(Mutex<Ti>);
+
+impl TextInputData {
+    fn lock(&self) -> MutexGuard<'_, Ti> {
+        self.0.lock().expect("text input mutex poisoned")
+    }
+
+    /// The state of `ti`.
+    fn of(ti: &ZwpTextInputV3) -> MutexGuard<'_, Ti> {
+        ti.data::<Self>()
+            .expect("every zwp_text_input_v3 is created with TextInputData")
+            .lock()
+    }
+}
 
 #[derive(Default, Clone)]
 struct TiState {
@@ -109,8 +122,7 @@ impl State {
     /// IM bridge of the old widget.
     pub(crate) fn text_input_focus(&mut self, old: Option<&WlSurface>, new: Option<&WlSurface>) {
         for ti in &self.text_input.inputs {
-            let data = ti.data::<TextInputData>().unwrap();
-            let mut d = data.0.lock().unwrap();
+            let mut d = TextInputData::of(ti);
             if let Some(o) = d.focus.take()
                 && o.is_alive()
             {
@@ -133,7 +145,7 @@ impl State {
 
     fn text_input_committed(&mut self, ti: &ZwpTextInputV3) {
         let (focus, info) = {
-            let d = ti.data::<TextInputData>().unwrap().0.lock().unwrap();
+            let d = TextInputData::of(ti);
             let Some(focus) = d.focus.clone() else {
                 return;
             };
@@ -170,7 +182,7 @@ impl EmbedServer {
                 return;
             }
             for ti in &st.text_input.inputs {
-                let d = ti.data::<TextInputData>().unwrap().0.lock().unwrap();
+                let d = TextInputData::of(ti);
                 if !d.enabled || d.focus.as_ref() != Some(&focus) {
                     continue;
                 }
@@ -217,7 +229,7 @@ impl Dispatch<ZwpTextInputManagerV3, ()> for State {
             let ti = data_init.init(id, TextInputData::default());
             if let Some(f) = state.kb_focus.as_ref().filter(|f| same_client(&ti, *f)) {
                 ti.enter(f);
-                ti.data::<TextInputData>().unwrap().0.lock().unwrap().focus = Some(f.clone());
+                TextInputData::of(&ti).focus = Some(f.clone());
             }
             state.text_input.inputs.push(ti);
         }
@@ -238,7 +250,7 @@ impl Dispatch<ZwpTextInputV3, TextInputData> for State {
         // Only commits change what the widget sees.
         let committed = matches!(request, R::Commit);
         {
-            let mut d = data.0.lock().unwrap();
+            let mut d = data.lock();
             match request {
                 R::Enable => {
                     // `enable` resets the pending state.
@@ -252,11 +264,10 @@ impl Dispatch<ZwpTextInputV3, TextInputData> for State {
                     anchor,
                 } => d.pending.surrounding = Some((text, cursor, anchor)),
                 R::SetContentType { hint, purpose } => {
-                    let h = hint.into_result().map(|h| h.bits()).unwrap_or(0);
+                    let h = hint.into_result().map_or(0, |h| h.bits());
                     let p = purpose
                         .into_result()
-                        .map(|p| p as u32)
-                        .unwrap_or(ContentPurpose::Normal as u32);
+                        .map_or(u32::from(ContentPurpose::Normal), u32::from);
                     d.pending.content = (h, p);
                 }
                 R::SetCursorRectangle {
@@ -306,7 +317,7 @@ impl Dispatch<ZwpTextInputV3, TextInputData> for State {
         resource: &ZwpTextInputV3,
         data: &TextInputData,
     ) {
-        let focus = data.0.lock().unwrap().focus.take();
+        let focus = data.lock().focus.take();
         let id: ObjectId = resource.id();
         state.text_input.inputs.retain(|t| t.id() != id);
         if let Some(sv) = focus.and_then(|f| state.sv_of(&f)) {

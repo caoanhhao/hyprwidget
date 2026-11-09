@@ -44,7 +44,7 @@ pub fn start() -> Result<Rc<Service>> {
         svc.method("dispatch", |args| {
             // 0.57 (Lua config): `dispatch hl.dsp.focus({ workspace = 3 })`;
             // older: `dispatch workspace 3`. Either way the args are joined.
-            checked(hyprland::request(&format!(
+            checked(&hyprland::request(&format!(
                 "dispatch {}",
                 join_args(&args)
             ))?)
@@ -52,7 +52,7 @@ pub fn start() -> Result<Rc<Service>> {
         svc.method("keyword", |args| {
             let name = arg_str(&args, 0, "option")?;
             let value = join_args(args.get(1..).unwrap_or_default());
-            checked(hyprland::request(&format!("keyword {name} {value}"))?)
+            checked(&hyprland::request(&format!("keyword {name} {value}"))?)
         });
         svc.method("message", |args| {
             let cmd = join_args(&args);
@@ -63,7 +63,7 @@ pub fn start() -> Result<Rc<Service>> {
                 Value::String(reply)
             })
         });
-        let weak = weak.clone();
+        let weak = std::rc::Weak::clone(weak);
         svc.method("refresh", move |_| {
             let mut st = State::default();
             st.fetch(dirty::ALL)?;
@@ -91,12 +91,12 @@ pub fn start() -> Result<Rc<Service>> {
         .join(".socket2.sock");
     std::thread::Builder::new()
         .name("hw-hyprland".into())
-        .spawn(move || worker(path, state, pusher))?;
+        .spawn(move || worker(&path, state, &pusher))?;
     Ok(svc)
 }
 
 /// Turns Hyprland's `error …` replies into errors.
-fn checked(reply: String) -> Result<Value> {
+fn checked(reply: &str) -> Result<Value> {
     let t = reply.trim();
     if t.starts_with("error") || t.starts_with("Invalid") || t.starts_with("unknown") {
         bail!("{t}");
@@ -198,8 +198,7 @@ fn focused_monitor(monitors: &Value) -> Value {
         .into_iter()
         .flatten()
         .find(|m| m["focused"] == json!(true))
-        .map(|m| m["name"].clone())
-        .unwrap_or(Value::Null)
+        .map_or(Value::Null, |m| m["name"].clone())
 }
 
 /// `{ [monitor] = "special:name" }` for monitors showing a special
@@ -245,24 +244,24 @@ fn fullscreen(monitors: &Value, clients: &Value) -> Value {
     Value::Object(out)
 }
 
-fn worker(path: std::path::PathBuf, mut state: State, pusher: Pusher) {
+fn worker(path: &std::path::Path, mut state: State, pusher: &Pusher) {
     let mut first = true;
     loop {
         if pusher.is_closed() {
             return;
         }
-        let Ok(stream) = UnixStream::connect(&path) else {
+        let Ok(stream) = UnixStream::connect(path) else {
             std::thread::sleep(Duration::from_secs(2));
             continue;
         };
         if !first {
             // Hyprland restarted (or we lost events): resync everything.
-            if state.fetch(dirty::ALL).is_ok() && !state.push(&pusher, dirty::ALL) {
+            if state.fetch(dirty::ALL).is_ok() && !state.push(pusher, dirty::ALL) {
                 return;
             }
         }
         first = false;
-        if !read_events(stream, &mut state, &pusher) {
+        if !read_events(stream, &mut state, pusher) {
             return;
         }
         std::thread::sleep(Duration::from_secs(1));
@@ -367,7 +366,7 @@ mod tests {
 
     #[test]
     fn checked_replies() {
-        assert!(checked("ok".into()).is_ok());
-        assert!(checked("error: 3 bad".into()).is_err());
+        assert!(checked("ok").is_ok());
+        assert!(checked("error: 3 bad").is_err());
     }
 }

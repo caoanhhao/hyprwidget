@@ -9,12 +9,12 @@ use hw_core::ipc::{self, Request, Response};
 #[derive(Parser)]
 #[command(name = "hyprwidget", version, about)]
 struct Cli {
-    /// Config directory (default: $HYPRWIDGET_CONFIG, then
-    /// $XDG_CONFIG_HOME/hyprwidget). Used by `run`, `check` and offline
+    /// Config directory (default: `$HYPRWIDGET_CONFIG`, then
+    /// `$XDG_CONFIG_HOME/hyprwidget`). Used by `run`, `check` and offline
     /// `option`.
     #[arg(short, long, value_name = "DIR", global = true)]
     config: Option<PathBuf>,
-    /// Instance name; the socket is $XDG_RUNTIME_DIR/hyprwidget/<instance>.sock.
+    /// Instance name; the socket is `$XDG_RUNTIME_DIR/hyprwidget/<instance>.sock`.
     #[arg(
         short,
         long,
@@ -46,7 +46,7 @@ enum Command {
     Eval { code: Vec<String> },
     /// List windows and request handlers.
     List,
-    /// Validate the config (errors as file:line).
+    /// Validate the config (errors as `file:line`).
     Check,
     /// Switch theme (`none` = no theme), or list themes (current marked `*`).
     Theme { name: Option<String> },
@@ -79,7 +79,7 @@ fn main() -> ExitCode {
         )
         .init();
 
-    match run(cli) {
+    match run(&cli) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("hyprwidget: {e:#}");
@@ -88,7 +88,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> anyhow::Result<ExitCode> {
+fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
     let ipc = |cmd: &str, args: Vec<String>| -> anyhow::Result<ExitCode> {
         let resp = ipc::send(
             &cli.instance,
@@ -109,7 +109,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let config = ConfigDir::resolve(cli.config.clone())?;
             tracing::info!(dir = %config.root.display(), lua = %hw_lua::lua_version().map_err(|e| anyhow::anyhow!("{e}"))?, "config");
             let code = hw_lua::app::run(config, cli.instance.clone())?;
-            Ok(ExitCode::from(code.clamp(0, 255) as u8))
+            Ok(ExitCode::from(
+                u8::try_from(code.clamp(0, 255)).expect("clamped to the u8 range"),
+            ))
         }
         Command::Request { name, args } => {
             let mut a = vec![name.clone()];
@@ -129,21 +131,18 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 cmd: "option".into(),
                 args: vec![name.clone()],
             };
-            match ipc::send(&cli.instance, &req) {
-                Ok(resp) => {
-                    print_response(&resp);
-                    Ok(if resp.ok {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::FAILURE
-                    })
-                }
-                Err(_) => {
-                    let config = ConfigDir::resolve(cli.config.clone())?;
-                    let v = hw_lua::app::option_offline(config, name)?;
-                    println!("{}", hw_lua::app::format_option(&v));
-                    Ok(ExitCode::SUCCESS)
-                }
+            if let Ok(resp) = ipc::send(&cli.instance, &req) {
+                print_response(&resp);
+                Ok(if resp.ok {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::FAILURE
+                })
+            } else {
+                let config = ConfigDir::resolve(cli.config.clone())?;
+                let v = hw_lua::app::option_offline(config, name)?;
+                println!("{}", hw_lua::app::format_option(&v));
+                Ok(ExitCode::SUCCESS)
             }
         }
         Command::Check => {

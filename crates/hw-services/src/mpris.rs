@@ -18,6 +18,7 @@ use zbus::fdo::DBusProxy;
 use zbus::zvariant::{ObjectPath, Value};
 
 use crate::dbus::{self, Props, p_bool, p_f64, p_str, v_dict, v_i64, v_str, v_strs};
+use crate::num::{f64_to_i64, i64_to_f64};
 
 const PREFIX: &str = "org.mpris.MediaPlayer2.";
 const PATH: &str = "/org/mpris/MediaPlayer2";
@@ -25,6 +26,10 @@ const ROOT_IFACE: &str = "org.mpris.MediaPlayer2";
 const PLAYER_IFACE: &str = "org.mpris.MediaPlayer2.Player";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors MPRIS properties, serialized to Lua as flat booleans"
+)]
 pub struct Player {
     /// `org.mpris.MediaPlayer2.spotify` — the id used by control methods.
     pub bus_name: String,
@@ -73,7 +78,7 @@ impl Player {
     pub fn position_now(&self) -> f64 {
         let mut p = self.position;
         if self.playing {
-            let dt = (glib::monotonic_time() - self.pos_at) as f64 / 1e6;
+            let dt = i64_to_f64(glib::monotonic_time() - self.pos_at) / 1e6;
             p += dt * if self.rate > 0.0 { self.rate } else { 1.0 };
         }
         if self.length > 0.0 {
@@ -83,7 +88,7 @@ impl Player {
     }
 
     fn set_position_us(&mut self, us: i64) {
-        self.position = us as f64 / 1e6;
+        self.position = i64_to_f64(us) / 1e6;
         self.pos_at = glib::monotonic_time();
     }
 
@@ -93,7 +98,9 @@ impl Player {
             .get("Rate")
             .and_then(|v| crate::dbus::v_f64(v))
             .unwrap_or(1.0);
-        if status != self.playback_status || rate != self.rate {
+        #[expect(clippy::float_cmp, reason = "exact change detection, not arithmetic")]
+        let changed = status != self.playback_status || rate != self.rate;
+        if changed {
             // Re-anchor the interpolation before the rate/status change.
             self.position = self.position_now();
             self.pos_at = glib::monotonic_time();
@@ -115,7 +122,7 @@ impl Player {
         }
     }
 
-    fn apply_metadata(&mut self, md: &Value) {
+    fn apply_metadata(&mut self, md: &Value<'_>) {
         let d = v_dict(md);
         let get = |k: &str| d.get(k).copied();
         let s = |k: &str| get(k).and_then(v_str).unwrap_or_default();
@@ -140,7 +147,15 @@ impl Player {
             };
             self.art_url = art;
         }
-        self.length = get("mpris:length").and_then(v_i64).unwrap_or(0) as f64 / 1e6;
+        self.length = i64_to_f64(get("mpris:length").and_then(v_i64).unwrap_or(0)) / 1e6;
+    }
+}
+
+impl std::fmt::Debug for Mpris {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Mpris")
+            .field("owners", &self.owners)
+            .finish_non_exhaustive()
     }
 }
 
@@ -164,7 +179,7 @@ thread_local! {
 /// Started on first use (main thread only).
 pub fn get() -> Rc<Mpris> {
     INSTANCE.with(|i| {
-        i.get_or_init(|| {
+        Rc::clone(i.get_or_init(|| {
             let this = Rc::new(Mpris {
                 players: Signal::new(Vec::new()),
                 tick: Signal::new(0),
@@ -176,8 +191,7 @@ pub fn get() -> Rc<Mpris> {
             let weak = Rc::downgrade(&this);
             dbus::spawn("mpris", async move { Mpris::discover(weak).await });
             this
-        })
-        .clone()
+        }))
     })
 }
 
@@ -255,7 +269,7 @@ impl Mpris {
                 name: bus.trim_start_matches(PREFIX).to_owned(),
                 rate: 1.0,
                 ..Default::default()
-            })
+            });
         });
         let mut tasks = Vec::new();
 
@@ -398,8 +412,7 @@ impl Mpris {
             players.with(|ps| {
                 ps.iter()
                     .find(|p| p.bus_name == bus)
-                    .map(|p| (p.position_now() * 10.0).round() / 10.0)
-                    .unwrap_or(0.0)
+                    .map_or(0.0, |p| (p.position_now() * 10.0).round() / 10.0)
             })
         })
     }
@@ -453,7 +466,6 @@ impl Mpris {
 /// Player controls. `bus` is [`Player::bus_name`].
 impl Mpris {
     fn call(
-        &self,
         bus: &str,
         method: &'static str,
         args: impl serde::Serialize + zbus::zvariant::DynamicType + 'static,
@@ -467,7 +479,7 @@ impl Mpris {
         });
     }
 
-    fn set_prop(&self, bus: &str, iface: &'static str, prop: &'static str, v: Value<'static>) {
+    fn set_prop(bus: &str, iface: &'static str, prop: &'static str, v: Value<'static>) {
         let bus = bus.to_owned();
         dbus::spawn("mpris set", async move {
             let conn = dbus::session().await?;
@@ -478,26 +490,26 @@ impl Mpris {
     }
 
     pub fn play_pause(&self, bus: &str) {
-        self.call(bus, "PlayPause", ());
+        Self::call(bus, "PlayPause", ());
     }
     pub fn play(&self, bus: &str) {
-        self.call(bus, "Play", ());
+        Self::call(bus, "Play", ());
     }
     pub fn pause(&self, bus: &str) {
-        self.call(bus, "Pause", ());
+        Self::call(bus, "Pause", ());
     }
     pub fn stop(&self, bus: &str) {
-        self.call(bus, "Stop", ());
+        Self::call(bus, "Stop", ());
     }
     pub fn next(&self, bus: &str) {
-        self.call(bus, "Next", ());
+        Self::call(bus, "Next", ());
     }
     pub fn previous(&self, bus: &str) {
-        self.call(bus, "Previous", ());
+        Self::call(bus, "Previous", ());
     }
     /// Relative seek in seconds.
     pub fn seek(&self, bus: &str, offset: f64) {
-        self.call(bus, "Seek", ((offset * 1e6) as i64,));
+        Self::call(bus, "Seek", (f64_to_i64(offset * 1e6),));
     }
     /// Absolute position in seconds.
     pub fn set_position(&self, bus: &str, secs: f64) {
@@ -506,20 +518,24 @@ impl Mpris {
         };
         match ObjectPath::try_from(p.track_id.clone()) {
             Ok(track) if !p.track_id.is_empty() => {
-                self.call(bus, "SetPosition", (track, (secs * 1e6) as i64))
+                Self::call(bus, "SetPosition", (track, f64_to_i64(secs * 1e6)));
             }
             _ => self.seek(bus, secs - p.position_now()),
         }
     }
     pub fn set_volume(&self, bus: &str, v: f64) {
-        self.set_prop(bus, PLAYER_IFACE, "Volume", Value::F64(v));
+        Self::set_prop(bus, PLAYER_IFACE, "Volume", Value::F64(v));
     }
+    #[expect(
+        clippy::fn_params_excessive_bools,
+        reason = "public API called from hw-lua with a Lua boolean"
+    )]
     pub fn set_shuffle(&self, bus: &str, on: bool) {
-        self.set_prop(bus, PLAYER_IFACE, "Shuffle", Value::Bool(on));
+        Self::set_prop(bus, PLAYER_IFACE, "Shuffle", Value::Bool(on));
     }
     /// `None`, `Track` or `Playlist`.
     pub fn set_loop_status(&self, bus: &str, s: &str) {
-        self.set_prop(bus, PLAYER_IFACE, "LoopStatus", Value::from(s.to_owned()));
+        Self::set_prop(bus, PLAYER_IFACE, "LoopStatus", Value::from(s.to_owned()));
     }
     pub fn raise(&self, bus: &str) {
         let bus = bus.to_owned();

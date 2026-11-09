@@ -78,6 +78,7 @@ pub fn line_of(text: &str, key: &str) -> usize {
 }
 
 /// Collects `file:line: message` diagnostics for a JSON manifest.
+#[derive(Debug)]
 pub struct Diags<'a> {
     pub file: &'a str,
     pub text: &'a str,
@@ -229,6 +230,10 @@ pub fn version_matches(req: &str, version: &str) -> Option<bool> {
 
 /// Parses and validates `plugin.json`. `file` is the path shown in
 /// diagnostics; `dir` the plugin directory (to check `entry`).
+#[expect(
+    clippy::too_many_lines,
+    reason = "sequential field-by-field manifest validation"
+)]
 pub fn parse_manifest(
     file: &str,
     text: &str,
@@ -310,7 +315,7 @@ pub fn parse_manifest(
             for (n, req) in m {
                 match req.as_str() {
                     Some(r) if version_matches(r, "0.0.0").is_some() => {
-                        dependencies.push((n.clone(), r.to_owned()))
+                        dependencies.push((n.clone(), r.to_owned()));
                     }
                     _ => d.at(
                         n,
@@ -436,7 +441,11 @@ pub fn discover(root: &Path) -> Vec<Found> {
     dirs.sort();
     dirs.into_iter()
         .map(|dir| {
-            let id = dir.file_name().unwrap().to_string_lossy().into_owned();
+            let id = dir
+                .file_name()
+                .expect("read_dir entries have a file name")
+                .to_string_lossy()
+                .into_owned();
             let file = format!("{PLUGINS_DIR}/{id}/{MANIFEST}");
             let manifest = match std::fs::read_to_string(dir.join(MANIFEST)) {
                 Ok(text) => parse_manifest(&file, &text, &dir).and_then(|m| {
@@ -466,6 +475,32 @@ pub fn discover(root: &Path) -> Vec<Found> {
 /// found (`file:line: …`, one per skipped plugin).
 /// Plugins to load (manifest, directory) and `(plugin, error)` pairs.
 pub type Plan = (Vec<(Manifest, PathBuf)>, Vec<(String, String)>);
+
+/// Depth-first visit for the topological plugin order; `false` on a cycle.
+fn visit_deps(
+    n: &str,
+    ok: &BTreeMap<String, (&Found, &Manifest)>,
+    done: &mut HashSet<String>,
+    visiting: &mut HashSet<String>,
+    order: &mut Vec<String>,
+) -> bool {
+    if done.contains(n) {
+        return true;
+    }
+    if !visiting.insert(n.to_owned()) {
+        return false;
+    }
+    let (_, m) = ok[n];
+    for (dep, _) in &m.dependencies {
+        if !visit_deps(dep, ok, done, visiting, order) {
+            return false;
+        }
+    }
+    visiting.remove(n);
+    done.insert(n.to_owned());
+    order.push(n.to_owned());
+    true
+}
 
 pub fn plan(found: &[Found], sel: &Selection) -> Plan {
     let mut errors: Vec<(String, String)> = Vec::new();
@@ -522,34 +557,10 @@ pub fn plan(found: &[Found], sel: &Selection) -> Plan {
     let mut order = Vec::new();
     let mut done: HashSet<String> = HashSet::new();
     let mut visiting: HashSet<String> = HashSet::new();
-    fn visit(
-        n: &str,
-        ok: &BTreeMap<String, (&Found, &Manifest)>,
-        done: &mut HashSet<String>,
-        visiting: &mut HashSet<String>,
-        order: &mut Vec<String>,
-    ) -> bool {
-        if done.contains(n) {
-            return true;
-        }
-        if !visiting.insert(n.to_owned()) {
-            return false;
-        }
-        let (_, m) = ok[n];
-        for (dep, _) in &m.dependencies {
-            if !visit(dep, ok, done, visiting, order) {
-                return false;
-            }
-        }
-        visiting.remove(n);
-        done.insert(n.to_owned());
-        order.push(n.to_owned());
-        true
-    }
     let names: Vec<String> = ok.keys().cloned().collect();
     for n in names {
         visiting.clear();
-        if !visit(&n, &ok, &mut done, &mut visiting, &mut order) {
+        if !visit_deps(&n, &ok, &mut done, &mut visiting, &mut order) {
             let (f, _) = ok[&n];
             errors.push((n.clone(), format!("{}:1: dependency cycle", f.file)));
             done.insert(n);
@@ -666,6 +677,10 @@ fn chunk_name(lua: &Lua, path: &Path) -> String {
 }
 
 /// Installs the loader (`hw.plugins`, private helpers).
+#[expect(
+    clippy::too_many_lines,
+    reason = "flat list of `hw.plugins` function registrations"
+)]
 pub fn install(lua: &Lua, hw: &Table) -> Result<()> {
     lua.set_app_data(PluginRt::default());
     let p = lua.create_table()?;

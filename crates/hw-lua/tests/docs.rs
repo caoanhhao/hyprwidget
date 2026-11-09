@@ -1,4 +1,4 @@
-//! Keeps `docs/` (English), `docs/vi/` (Vietnamese) and the LuaLS stubs in
+//! Keeps `docs/` (English), `docs/vi/` (Vietnamese) and the `LuaLS` stubs in
 //! `types/` in sync with the code: every widget kind, event, inherited
 //! option, native service and service prop must be documented and typed.
 

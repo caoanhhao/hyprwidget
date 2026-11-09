@@ -8,12 +8,13 @@ use zbus::object_server::SignalEmitter;
 pub const NAME: &str = "org.kde.StatusNotifierWatcher";
 pub const PATH: &str = "/StatusNotifierWatcher";
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Registry {
     pub items: Vec<String>,
     pub hosts: Vec<String>,
 }
 
+#[derive(Debug)]
 pub struct Watcher {
     pub reg: Arc<Mutex<Registry>>,
 }
@@ -45,10 +46,13 @@ impl Watcher {
         #[zbus(header)] hdr: Header<'_>,
         #[zbus(signal_emitter)] em: SignalEmitter<'_>,
     ) {
-        let sender = hdr.sender().map(|s| s.to_string()).unwrap_or_default();
+        let sender = hdr
+            .sender()
+            .map(std::string::ToString::to_string)
+            .unwrap_or_default();
         let id = item_id(service, &sender);
         let added = {
-            let mut reg = self.reg.lock().unwrap();
+            let mut reg = self.reg.lock().expect("tray registry lock poisoned");
             if reg.items.contains(&id) {
                 false
             } else {
@@ -69,7 +73,7 @@ impl Watcher {
         #[zbus(signal_emitter)] em: SignalEmitter<'_>,
     ) {
         {
-            let mut reg = self.reg.lock().unwrap();
+            let mut reg = self.reg.lock().expect("tray registry lock poisoned");
             if !reg.hosts.iter().any(|h| h == service) {
                 reg.hosts.push(service.to_owned());
             }
@@ -80,14 +84,24 @@ impl Watcher {
 
     #[zbus(property)]
     fn registered_status_notifier_items(&self) -> Vec<String> {
-        self.reg.lock().unwrap().items.clone()
+        self.reg
+            .lock()
+            .expect("tray registry lock poisoned")
+            .items
+            .clone()
     }
 
     #[zbus(property)]
     fn is_status_notifier_host_registered(&self) -> bool {
-        !self.reg.lock().unwrap().hosts.is_empty()
+        !self
+            .reg
+            .lock()
+            .expect("tray registry lock poisoned")
+            .hosts
+            .is_empty()
     }
 
+    #[expect(clippy::unused_self, reason = "zbus interface methods take &self")]
     #[zbus(property)]
     fn protocol_version(&self) -> i32 {
         0

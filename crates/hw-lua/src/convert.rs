@@ -19,6 +19,38 @@ impl<T> LuaResultExt<T> for Result<T> {
     }
 }
 
+/// 0-based Rust index → 1-based Lua index.
+pub fn lua_index(i: usize) -> Result<i64> {
+    i.checked_add(1)
+        .and_then(|n| i64::try_from(n).ok())
+        .ok_or_else(|| mlua::Error::runtime(format!("index {i} out of Lua integer range")))
+}
+
+/// Lua integer → float, as Lua itself converts (rounds above 2^53).
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "same rounding as Lua's integer → float conversion; no lossless i64 → f64 exists"
+)]
+pub fn int_to_f64(i: i64) -> f64 {
+    i as f64
+}
+
+/// Whole float → integer. Callers check `n.fract() == 0.0` and a magnitude
+/// below 2^53 first, so the value is exact.
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "callers only pass whole numbers below 2^53, which i64 holds exactly"
+)]
+pub fn whole_f64_to_i64(n: f64) -> i64 {
+    debug_assert!(
+        n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0,
+        "not a whole number below 2^53: {n}"
+    );
+    n as i64
+}
+
 pub fn json_to_lua(lua: &Lua, v: &serde_json::Value) -> Result<Value> {
     let opts = SerializeOptions::new()
         .serialize_none_to_null(false)
@@ -57,9 +89,8 @@ pub fn lua_to_prop(v: &Value) -> Prop {
             return Prop::Nil;
         }
         match v {
-            Value::Nil => Prop::Nil,
             Value::Boolean(b) => Prop::Bool(*b),
-            Value::Integer(i) => Prop::Num(*i as f64),
+            Value::Integer(i) => Prop::Num(int_to_f64(*i)),
             Value::Number(n) => Prop::Num(*n),
             Value::String(s) => Prop::Str(s.to_string_lossy()),
             Value::Table(t) => table_to_prop(t, depth),
@@ -74,7 +105,7 @@ pub fn lua_to_prop(v: &Value) -> Prop {
         if t.raw_len() > 0 {
             return Prop::List(
                 t.sequence_values::<Value>()
-                    .filter_map(|v| v.ok())
+                    .filter_map(std::result::Result::ok)
                     .map(|v| go(&v, depth + 1))
                     .collect(),
             );
@@ -94,7 +125,7 @@ pub fn prop_to_lua(lua: &Lua, p: &Prop) -> Result<Value> {
     Ok(match p {
         Prop::Nil => Value::Nil,
         Prop::Bool(b) => Value::Boolean(*b),
-        Prop::Num(n) if n.fract() == 0.0 && n.abs() < 9e15 => Value::Integer(*n as i64),
+        Prop::Num(n) if n.fract() == 0.0 && n.abs() < 9e15 => Value::Integer(whole_f64_to_i64(*n)),
         Prop::Num(n) => Value::Number(*n),
         Prop::Str(s) => Value::String(lua.create_string(s)?),
         Prop::List(l) => {
@@ -122,8 +153,8 @@ pub fn prop_to_lua(lua: &Lua, p: &Prop) -> Result<Value> {
 }
 
 /// `tostring`-like rendering for `eval`/`option` output: JSON for tables.
-pub fn display(lua: &Lua, v: Value) -> String {
-    match &v {
+pub fn display(lua: &Lua, v: &Value) -> String {
+    match v {
         Value::Nil => "nil".into(),
         Value::String(s) => s.to_string_lossy(),
         Value::Table(_) => match lua_to_json(lua, v.clone()) {

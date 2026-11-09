@@ -3,8 +3,8 @@
 use std::os::fd::AsRawFd;
 
 use gtk4::{cairo, gdk, glib, prelude::*};
-use smithay::backend::allocator::Buffer as _;
 use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::{Buffer as _, Fourcc};
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_output::Transform;
@@ -15,10 +15,15 @@ use smithay::wayland::drm_syncobj::DrmSyncPoint;
 use smithay::wayland::shm::with_buffer_contents;
 use smithay::wayland::single_pixel_buffer::get_single_pixel_buffer;
 
+use crate::cast;
+
 /// Size of a buffer in buffer pixels.
 pub(crate) fn buffer_size(buffer: &WlBuffer) -> Option<(i32, i32)> {
     if let Ok(d) = get_dmabuf(buffer) {
-        return Some((d.width() as i32, d.height() as i32));
+        return Some((
+            i32::try_from(d.width()).ok()?,
+            i32::try_from(d.height()).ok()?,
+        ));
     }
     if get_single_pixel_buffer(buffer).is_ok() {
         return Some((1, 1));
@@ -39,7 +44,7 @@ pub(crate) fn logical_size(
         return d;
     }
     if let Some(s) = src {
-        return (s.w.round() as i32, s.h.round() as i32).into();
+        return (cast::px(s.w.round()), cast::px(s.h.round())).into();
     }
     let scale = scale.max(1);
     let (w, h) = (buffer.0 / scale, buffer.1 / scale);
@@ -83,13 +88,22 @@ pub(crate) fn import(
 }
 
 /// Releases a buffer that is not going to be shown.
-pub(crate) fn discard(buffer: WlBuffer, release: Option<DrmSyncPoint>) {
+pub(crate) fn discard(buffer: &WlBuffer, release: Option<DrmSyncPoint>) {
     if let Some(point) = release {
         let _ = point.signal();
     }
     if buffer.is_alive() {
         buffer.release();
     }
+}
+
+/// The DRM fourcc code of `fourcc`.
+#[expect(
+    clippy::as_conversions,
+    reason = "`Fourcc` is a fieldless #[repr(u32)] enum without a `From` impl; `as` reads its code"
+)]
+fn fourcc_code(fourcc: Fourcc) -> u32 {
+    fourcc as u32
 }
 
 fn dmabuf_texture(
@@ -104,21 +118,22 @@ fn dmabuf_texture(
         .set_display(display)
         .set_width(dmabuf.width())
         .set_height(dmabuf.height())
-        .set_fourcc(format.code as u32)
+        .set_fourcc(fourcc_code(format.code))
         .set_modifier(format.modifier.into())
         .set_premultiplied(true)
-        .set_n_planes(dmabuf.num_planes() as u32);
+        .set_n_planes(cast::sat_u32(dmabuf.num_planes()));
     for (i, ((fd, offset), stride)) in dmabuf
         .handles()
         .zip(dmabuf.offsets())
         .zip(dmabuf.strides())
         .enumerate()
     {
+        let i = cast::sat_u32(i);
         // SAFETY: the fd stays open while the `Dmabuf` (moved into the release
         // func below) is alive, i.e. until GDK is done with the texture.
-        builder = unsafe { builder.set_fd(i as u32, fd.as_raw_fd()) }
-            .set_offset(i as u32, offset)
-            .set_stride(i as u32, stride);
+        builder = unsafe { builder.set_fd(i, fd.as_raw_fd()) }
+            .set_offset(i, offset)
+            .set_stride(i, stride);
     }
     let keep = dmabuf.clone();
     // SAFETY: see above; GDK calls the release func exactly once.
@@ -156,19 +171,23 @@ fn shm_texture(
             other => anyhow::bail!("unsupported shm format {other:?}"),
         };
         let start = usize::try_from(data.offset)?;
-        let size = usize::try_from(data.stride)?.checked_mul(usize::try_from(data.height)?);
+        let stride = usize::try_from(data.stride)?;
+        let size = stride.checked_mul(usize::try_from(data.height)?);
         let size = size.filter(|&size| start.checked_add(size).is_some_and(|end| end <= len));
         let Some(size) = size else {
             anyhow::bail!("shm buffer out of bounds");
         };
-        // SAFETY: smithay mapped `len` bytes at `ptr`; `start + size <= len`
-        // checked above without overflow.
-        let bytes = unsafe { std::slice::from_raw_parts(ptr.add(start), size) };
+        // SAFETY: smithay mapped `len` bytes at `ptr` and `start <= len`
+        // (checked above), so the offset stays inside the mapping.
+        let first = unsafe { ptr.add(start) };
+        // SAFETY: `start + size <= len` checked above without overflow, so
+        // `size` bytes from `first` are mapped and stay so during the call.
+        let bytes = unsafe { std::slice::from_raw_parts(first, size) };
         let mut builder = gdk::MemoryTextureBuilder::new()
             .set_bytes(Some(&glib::Bytes::from(bytes)))
             .set_width(data.width)
             .set_height(data.height)
-            .set_stride(data.stride as usize)
+            .set_stride(stride)
             .set_format(format);
         if let Some(prev) = previous
             .filter(|p| p.width() == data.width && p.height() == data.height && !damage.is_empty())

@@ -33,6 +33,14 @@ pub struct PowerProfiles {
     pub state: Signal<State>,
 }
 
+impl std::fmt::Debug for PowerProfiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PowerProfiles")
+            .field("state", &self.state.peek())
+            .finish()
+    }
+}
+
 thread_local! {
     static INSTANCE: OnceCell<Rc<PowerProfiles>> = const { OnceCell::new() };
 }
@@ -40,7 +48,7 @@ thread_local! {
 /// Started on first use (main thread only).
 pub fn get() -> Rc<PowerProfiles> {
     INSTANCE.with(|i| {
-        i.get_or_init(|| {
+        Rc::clone(i.get_or_init(|| {
             let this = Rc::new(PowerProfiles {
                 state: Signal::new(State::default()),
             });
@@ -62,13 +70,12 @@ pub fn get() -> Rc<PowerProfiles> {
                 .await
             });
             this
-        })
-        .clone()
+        }))
     })
 }
 
 /// `aa{sv}` → profiles.
-fn parse_profiles(v: &Value) -> Vec<Profile> {
+fn parse_profiles(v: &Value<'_>) -> Vec<Profile> {
     let Value::Array(a) = unwrap_variant(v) else {
         return Vec::new();
     };
@@ -78,7 +85,7 @@ fn parse_profiles(v: &Value) -> Vec<Profile> {
                 return None;
             };
             let get = |k: &str| {
-                d.get::<&str, Value>(&k)
+                d.get::<&str, Value<'_>>(&k)
                     .ok()
                     .flatten()
                     .and_then(|v| v_str(&v))

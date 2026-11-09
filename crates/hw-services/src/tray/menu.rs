@@ -26,6 +26,10 @@ pub enum Toggle {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors dbusmenu item properties, serialized to Lua as flat booleans"
+)]
 pub struct MenuNode {
     pub id: i32,
     pub label: String,
@@ -41,7 +45,7 @@ pub struct MenuNode {
 }
 
 impl MenuNode {
-    fn from_props(id: i32, props: &HashMap<String, &Value>) -> Self {
+    fn from_props(id: i32, props: &HashMap<String, &Value<'_>>) -> Self {
         let s = |k: &str| props.get(k).and_then(|v| v_str(v)).unwrap_or_default();
         let b = |k: &str, d: bool| props.get(k).and_then(|v| v_bool(v)).unwrap_or(d);
         Self {
@@ -72,7 +76,7 @@ fn props_of<'a, 'v>(v: &'a Value<'v>) -> HashMap<String, &'a Value<'v>> {
 }
 
 /// Parses one `(ia{sv}av)` node (possibly wrapped in a variant).
-pub fn parse_node(v: &Value) -> Option<MenuNode> {
+pub fn parse_node(v: &Value<'_>) -> Option<MenuNode> {
     let Value::Structure(s) = unwrap_variant(v) else {
         return None;
     };
@@ -80,7 +84,7 @@ pub fn parse_node(v: &Value) -> Option<MenuNode> {
     if f.len() != 3 {
         return None;
     }
-    let id = v_i64(&f[0])? as i32;
+    let id = i32::try_from(v_i64(&f[0])?).ok()?;
     let mut node = MenuNode::from_props(id, &props_of(&f[1]));
     if let Value::Array(a) = unwrap_variant(&f[2]) {
         node.children = a.iter().filter_map(parse_node).collect();
@@ -89,12 +93,12 @@ pub fn parse_node(v: &Value) -> Option<MenuNode> {
 }
 
 /// Parses the `layout` returned by `GetLayout`.
-pub fn parse_layout(
+pub fn parse_layout<S: std::hash::BuildHasher>(
     id: i32,
-    props: &HashMap<String, OwnedValue>,
+    props: &HashMap<String, OwnedValue, S>,
     children: &[OwnedValue],
 ) -> MenuNode {
-    let p: HashMap<String, &Value> = props
+    let p: HashMap<String, &Value<'_>> = props
         .iter()
         .map(|(k, v)| (k.clone(), unwrap_variant(v)))
         .collect();
@@ -104,10 +108,10 @@ pub fn parse_layout(
 }
 
 /// Applies an `ItemsPropertiesUpdated` change in place.
-pub fn apply_props(
+pub fn apply_props<S: std::hash::BuildHasher>(
     root: &mut MenuNode,
     id: i32,
-    changed: &HashMap<String, OwnedValue>,
+    changed: &HashMap<String, OwnedValue, S>,
     removed: &[String],
 ) {
     fn find(n: &mut MenuNode, id: i32) -> Option<&mut MenuNode> {
@@ -118,7 +122,7 @@ pub fn apply_props(
     }
     let Some(n) = find(root, id) else { return };
     let children = std::mem::take(&mut n.children);
-    let mut p: HashMap<String, &Value> = HashMap::new();
+    let mut p: HashMap<String, &Value<'_>> = HashMap::new();
     // Rebuild from the current values, then overlay the change.
     let current = node_props(n);
     for (k, v) in &current {
@@ -152,7 +156,7 @@ fn node_props(n: &MenuNode) -> Vec<(String, Value<'static>)> {
         Toggle::None => {}
     }
     if let Some(s) = n.toggle_state {
-        v.push(("toggle-state".into(), Value::I32(s as i32)));
+        v.push(("toggle-state".into(), Value::I32(i32::from(s))));
     }
     if n.submenu {
         v.push(("children-display".into(), Value::from("submenu")));
@@ -202,7 +206,7 @@ fn fill(
                 ),
             };
             action.set_enabled(n.enabled);
-            let (owner, id) = (owner.clone(), n.id);
+            let (owner, id) = (Weak::clone(owner), n.id);
             action.connect_activate(move |_, _| {
                 if let Some(m) = owner.upgrade() {
                     m.click(id);
@@ -220,13 +224,13 @@ fn fill(
 /// be dropped (its widget is gone).
 type ModelListener = Box<dyn Fn(&gio::Menu) -> bool>;
 
-/// A live DBusMenu. `actions` is updated in place; the model is replaced on
+/// A live `DBusMenu`. `actions` is updated in place; the model is replaced on
 /// every layout change and handed to [`DbusMenu::connect_model`] listeners.
 ///
 /// Why not update one model in place: a `GtkPopoverMenu` adds a stack page
 /// per submenu but does not remove it when the *section* holding the
 /// submenu is removed (GTK 4.24), so every rebuild leaked the pages and
-/// warned "duplicate child name in GtkStack: Charset" (fcitx5's menu
+/// warned "duplicate child name in `GtkStack`: Charset" (fcitx5's menu
 /// changes with the focused input method). A new model makes GTK build a
 /// new popover and free the old one.
 pub struct DbusMenu {
@@ -239,6 +243,16 @@ pub struct DbusMenu {
     path: String,
     refresh_pending: Cell<bool>,
     task: RefCell<Option<glib::JoinHandle<()>>>,
+}
+
+impl std::fmt::Debug for DbusMenu {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbusMenu")
+            .field("bus", &self.bus)
+            .field("path", &self.path)
+            .field("root", &self.root)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for DbusMenu {
@@ -280,13 +294,13 @@ impl DbusMenu {
             zbus::Proxy::new(&this.conn, this.bus.clone(), this.path.clone(), IFACE).await?;
         let mut signals = proxy.receive_all_signals().await?;
         drop(this);
-        Self::refresh(weak.clone()).await;
+        Self::refresh(Weak::clone(&weak)).await;
         while let Some(msg) = signals.next().await {
             let Some(this) = weak.upgrade() else { break };
             let member = msg
                 .header()
                 .member()
-                .map(|m| m.to_string())
+                .map(std::string::ToString::to_string)
                 .unwrap_or_default();
             match member.as_str() {
                 "ItemsPropertiesUpdated" => {
@@ -332,10 +346,10 @@ impl DbusMenu {
     }
 
     async fn refresh(weak: Weak<Self>) {
+        type Layout = (u32, (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>));
         let Some(this) = weak.upgrade() else { return };
         let (conn, bus, path) = (this.conn.clone(), this.bus.clone(), this.path.clone());
         drop(this);
-        type Layout = (u32, (i32, HashMap<String, OwnedValue>, Vec<OwnedValue>));
         let res: anyhow::Result<Layout> = async {
             let reply = conn
                 .call_method(
@@ -389,7 +403,9 @@ impl DbusMenu {
     fn click(&self, id: i32) {
         let (conn, bus, path) = (self.conn.clone(), self.bus.clone(), self.path.clone());
         dbus::spawn("dbusmenu event", async move {
-            let ts = (glib::monotonic_time() / 1000) as u32;
+            // Milliseconds, wrapping like X11 timestamps.
+            let ts = u32::try_from((glib::monotonic_time() / 1000).rem_euclid(1 << 32))
+                .unwrap_or_default();
             conn.call_method(
                 Some(bus.as_str()),
                 path.as_str(),

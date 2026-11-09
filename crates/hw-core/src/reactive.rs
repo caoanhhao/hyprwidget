@@ -3,7 +3,7 @@
 //!
 //! Everything lives on the GTK main thread (`Rc<RefCell>`). Other threads
 //! push values through a [`SignalSender`], which forwards them over a channel
-//! drained by the GLib main loop.
+//! drained by the `GLib` main loop.
 
 use std::any::Any;
 use std::cell::{Cell, RefCell};
@@ -33,7 +33,7 @@ pub struct Signal<T>(Rc<Inner<T>>);
 
 impl<T> Clone for Signal<T> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(Rc::clone(&self.0))
     }
 }
 
@@ -53,7 +53,7 @@ trait Source {
 
 impl<T: 'static> Source for Inner<T> {
     fn id(&self) -> *const () {
-        self as *const Self as *const ()
+        std::ptr::from_ref(self).cast::<()>()
     }
 
     fn subscribe_any(self: Rc<Self>, f: Rc<dyn Fn()>) -> Subscription {
@@ -78,7 +78,6 @@ fn track(src: Rc<dyn Source>) {
 
 /// Runs `f` and returns the signals it read.
 fn collect_deps<R>(f: impl FnOnce() -> R) -> (R, Vec<Rc<dyn Source>>) {
-    TRACKING.with(|t| t.borrow_mut().push(Vec::new()));
     // Pop even if `f` panics so the stack stays balanced.
     struct Pop;
     impl Drop for Pop {
@@ -86,6 +85,7 @@ fn collect_deps<R>(f: impl FnOnce() -> R) -> (R, Vec<Rc<dyn Source>>) {
             TRACKING.with(|t| t.borrow_mut().pop());
         }
     }
+    TRACKING.with(|t| t.borrow_mut().push(Vec::new()));
     let pop = Pop;
     let r = f();
     let deps = TRACKING.with(|t| t.borrow_mut().last_mut().map(std::mem::take));
@@ -113,7 +113,7 @@ impl<T: 'static> Signal<T> {
     /// Borrows the current value. Registers a dependency when called inside
     /// a computed.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        track(self.0.clone());
+        track(Rc::<Inner<T>>::clone(&self.0));
         let value = self.0.value.borrow().clone();
         f(&value)
     }
@@ -152,7 +152,7 @@ impl<T: 'static> Signal<T> {
             .subs
             .borrow()
             .iter()
-            .map(|(_, f)| f.clone())
+            .map(|(_, f)| Rc::clone(f))
             .collect();
         if subs.is_empty() {
             return;
@@ -224,7 +224,7 @@ impl<T: PartialEq + 'static> Signal<T> {
 
 impl<T: PartialEq + Send + 'static> Signal<T> {
     /// Returns a `Send` handle that sets this signal from any thread. Values
-    /// are delivered on the thread-default GLib main context of the caller
+    /// are delivered on the thread-default `GLib` main context of the caller
     /// (the GTK main thread). Must be called on the main thread.
     pub fn sender(&self) -> SignalSender<T> {
         let (tx, rx) = async_channel::unbounded::<T>();
@@ -246,7 +246,15 @@ pub struct WeakSignal<T>(Weak<Inner<T>>);
 
 impl<T> Clone for WeakSignal<T> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(Weak::clone(&self.0))
+    }
+}
+
+impl<T> fmt::Debug for WeakSignal<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WeakSignal")
+            .field("alive", &(self.0.strong_count() > 0))
+            .finish()
     }
 }
 
@@ -262,6 +270,14 @@ pub struct SignalSender<T>(async_channel::Sender<T>);
 impl<T> Clone for SignalSender<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
+    }
+}
+
+impl<T> fmt::Debug for SignalSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SignalSender")
+            .field("closed", &self.0.is_closed())
+            .finish()
     }
 }
 
@@ -285,6 +301,14 @@ impl Subscription {
     /// Keeps the subscription alive for as long as the signal exists.
     pub fn forget(mut self) {
         self.0 = None;
+    }
+}
+
+impl fmt::Debug for Subscription {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Subscription")
+            .field("active", &self.0.is_some())
+            .finish()
     }
 }
 
@@ -323,7 +347,7 @@ impl<T: Clone + PartialEq + 'static> ComputedState<T> {
         let subs = deps
             .into_iter()
             .map(|d| {
-                let weak = weak.clone();
+                let weak = Weak::clone(&weak);
                 d.subscribe_any(Rc::new(move || {
                     if let Some(state) = weak.upgrade() {
                         state.rerun();
@@ -346,7 +370,7 @@ impl<T: Clone + PartialEq + 'static> ComputedState<T> {
 }
 
 /// Creates a signal set to `f()` now and then every `interval`. The timer
-/// stops when the signal is dropped. Requires a running GLib main loop.
+/// stops when the signal is dropped. Requires a running `GLib` main loop.
 pub fn poll<T: PartialEq + 'static>(interval: Duration, f: impl Fn() -> T + 'static) -> Signal<T> {
     let signal = Signal::new(untracked(&f));
     let weak = signal.downgrade();
@@ -361,7 +385,8 @@ pub fn poll<T: PartialEq + 'static>(interval: Duration, f: impl Fn() -> T + 'sta
     signal
 }
 
-/// Removes a GLib source when dropped.
+/// Removes a `GLib` source when dropped.
+#[derive(Debug)]
 pub struct SourceGuard(pub Option<glib::SourceId>);
 
 impl Drop for SourceGuard {
@@ -375,6 +400,10 @@ impl Drop for SourceGuard {
 /// Removes a source from the thread-default main context, ignoring sources
 /// that already finished. (`SourceId::remove` only looks at the global
 /// default context and panics on unknown ids.)
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "pub API used by other workspace crates; consumes the id it removes"
+)]
 pub fn remove_source(id: glib::SourceId) {
     if let Some(src) = glib::MainContext::ref_thread_default().find_source_by_id(&id) {
         src.destroy();
@@ -389,7 +418,7 @@ mod tests {
     fn set_notifies_only_on_change() {
         let s = Signal::new(1);
         let hits = Rc::new(Cell::new(0));
-        let h = hits.clone();
+        let h = Rc::clone(&hits);
         let _sub = s.subscribe(move |_| h.set(h.get() + 1));
         s.set(1);
         s.set(2);
@@ -480,7 +509,7 @@ mod tests {
         let s2 = s.clone();
         let _sub = s.subscribe(move |v| {
             if *v > 10 {
-                s2.set(10)
+                s2.set(10);
             }
         });
         s.set(20);
@@ -502,11 +531,11 @@ mod tests {
         let s2 = s.clone();
         let _clamp = s.subscribe(move |v| {
             if *v > 10 {
-                s2.set(10)
+                s2.set(10);
             }
         });
         let seen = Rc::new(RefCell::new(Vec::new()));
-        let seen2 = seen.clone();
+        let seen2 = Rc::clone(&seen);
         let _log = s.subscribe(move |v| seen2.borrow_mut().push(*v));
         s.set(20);
         assert_eq!(*seen.borrow(), [10]);

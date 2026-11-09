@@ -59,7 +59,7 @@ impl Gradient {
 }
 
 fn fmt_num(v: f64) -> String {
-    let s = format!("{:.3}", v);
+    let s = format!("{v:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s == "-0" { "0".into() } else { s.into() }
 }
@@ -90,7 +90,7 @@ fn parse_hex_rgba(h: &str, src: &str) -> Result<Rgba, ColorError> {
     }
     let b = |i: usize| hex_byte(&h[i..i + 2]).ok_or_else(|| err(src));
     let a = if h.len() == 8 {
-        b(6)? as f64 / 255.0
+        f64::from(b(6)?) / 255.0
     } else {
         1.0
     };
@@ -109,7 +109,7 @@ fn parse_hex_argb(h: &str, src: &str) -> Result<Rgba, ColorError> {
     }
     let b = |i: usize| hex_byte(&h[i..i + 2]).ok_or_else(|| err(src));
     Ok(Rgba {
-        a: b(0)? as f64 / 255.0,
+        a: f64::from(b(0)?) / 255.0,
         r: b(2)?,
         g: b(4)?,
         b: b(6)?,
@@ -137,19 +137,19 @@ pub fn parse_color(s: &str) -> Result<Rgba, ColorError> {
         let parts: Vec<&str> = body.split(',').map(str::trim).collect();
         let chan = |p: &str| p.parse::<u8>().map_err(|_| err(s));
         return match parts.as_slice() {
-            [r, g, b] => Ok(Rgba {
-                r: chan(r)?,
-                g: chan(g)?,
-                b: chan(b)?,
+            [red, green, blue] => Ok(Rgba {
+                r: chan(red)?,
+                g: chan(green)?,
+                b: chan(blue)?,
                 a: 1.0,
             }),
-            [r, g, b, a] => {
-                let a: f64 = a.parse().map_err(|_| err(s))?;
+            [red, green, blue, alpha] => {
+                let alpha: f64 = alpha.parse().map_err(|_| err(s))?;
                 Ok(Rgba {
-                    r: chan(r)?,
-                    g: chan(g)?,
-                    b: chan(b)?,
-                    a: a.clamp(0.0, 1.0),
+                    r: chan(red)?,
+                    g: chan(green)?,
+                    b: chan(blue)?,
+                    a: alpha.clamp(0.0, 1.0),
                 })
             }
             _ => Err(err(s)),

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use gtk4::prelude::*;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Windows {
     map: RefCell<BTreeMap<String, gtk4::Window>>,
 }
@@ -43,9 +43,9 @@ impl Windows {
         let w = self.get(name)?;
         let show = !w.is_visible();
         if show {
-            present(&w)
+            present(&w);
         } else {
-            w.set_visible(false)
+            w.set_visible(false);
         }
         Some(show)
     }

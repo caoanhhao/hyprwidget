@@ -44,7 +44,11 @@ pub fn start() -> Result<Rc<Service>> {
     let running = Arc::new(AtomicBool::new(false));
     let svc = Rc::new_cyclic(|weak: &std::rc::Weak<Service>| {
         let mut svc = Service::new("keystrokes", PROPS);
-        let (en, run, w) = (enabled.clone(), running.clone(), weak.clone());
+        let (en, run, w) = (
+            Arc::clone(&enabled),
+            Arc::clone(&running),
+            std::rc::Weak::clone(weak),
+        );
         svc.method("enable", move |args| {
             let on = args.first().and_then(Value::as_bool).unwrap_or(true);
             en.store(on, Ordering::SeqCst);
@@ -54,7 +58,7 @@ pub fn start() -> Result<Rc<Service>> {
             svc.set("enabled", json!(on));
             // One reader thread at a time; it exits soon after disabling.
             if on && !run.swap(true, Ordering::SeqCst) {
-                let (en, run, pusher) = (en.clone(), run.clone(), svc.pusher());
+                let (en, run, pusher) = (Arc::clone(&en), Arc::clone(&run), svc.pusher());
                 std::thread::Builder::new()
                     .name("hw-keystrokes".into())
                     .spawn(move || {
@@ -117,7 +121,7 @@ fn keyboards(proc_devices: &str) -> Vec<Device> {
         let mut keys = None;
         for line in block.lines() {
             if let Some(n) = line.strip_prefix("N: Name=") {
-                name = n.trim_matches('"').to_owned();
+                n.trim_matches('"').clone_into(&mut name);
             } else if let Some(h) = line.strip_prefix("H: Handlers=") {
                 event = h.split_whitespace().find(|w| w.starts_with("event"));
             } else if let Some(k) = line.strip_prefix("B: KEY=") {
@@ -217,7 +221,7 @@ fn reader(enabled: &AtomicBool, pusher: &Pusher) {
             }
         }
         if open.is_empty() {
-            std::thread::sleep(Duration::from_millis(POLL_MS as u64));
+            std::thread::sleep(Duration::from_millis(u64::from(POLL_MS.unsigned_abs())));
             continue;
         }
         let mut fds: Vec<libc::pollfd> = open
@@ -228,8 +232,9 @@ fn reader(enabled: &AtomicBool, pusher: &Pusher) {
                 revents: 0,
             })
             .collect();
-        // SAFETY: `fds` is a valid array of `fds.len()` pollfds.
-        let n = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, POLL_MS) };
+        let nfds = libc::nfds_t::try_from(fds.len()).expect("a handful of devices fits nfds_t");
+        // SAFETY: `fds` is a valid array of `nfds` pollfds.
+        let n = unsafe { libc::poll(fds.as_mut_ptr(), nfds, POLL_MS) };
         if n <= 0 {
             continue;
         }

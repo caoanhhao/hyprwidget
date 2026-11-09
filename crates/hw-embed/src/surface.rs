@@ -14,8 +14,12 @@ use gtk4::{gdk, glib, glib::translate::IntoGlib, graphene, gsk, prelude::*};
 use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
-use crate::input::Mods;
+use smithay::backend::input::{AxisSource, ButtonState, KeyState};
+
+use crate::cast;
+use crate::input::{Mods, Touch};
 use crate::server::EmbedServer;
+use crate::view::Mode;
 
 /// Rectangle in surface-tree coordinates (logical pixels of the client).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -103,15 +107,15 @@ impl SurfaceView {
         sv
     }
 
-    /// `scale` mode: the tree keeps its own size and is scaled to fit.
-    pub(crate) fn set_scale_mode(&self, on: bool) {
-        self.imp().scale_mode.set(on);
+    /// `Mode::Scale`: the tree keeps its own size and is scaled to fit.
+    pub(crate) fn set_scale_mode(&self, mode: Mode) {
+        self.imp().scale_mode.set(mode == Mode::Scale);
         self.queue_allocate();
     }
 
     /// Dialogs (secondary toplevels) are centred instead of filling.
-    pub(crate) fn set_centered(&self, on: bool) {
-        self.imp().centered.set(on);
+    pub(crate) fn center(&self) {
+        self.imp().centered.set(true);
         self.queue_allocate();
     }
 
@@ -194,8 +198,8 @@ impl SurfaceView {
     fn mapping(&self) -> (f64, (f64, f64)) {
         let imp = self.imp();
         let g = imp.geometry.get();
-        let (w, h) = (self.width() as f64, self.height() as f64);
-        let (gw, gh) = (g.w.max(1) as f64, g.h.max(1) as f64);
+        let (w, h) = (f64::from(self.width()), f64::from(self.height()));
+        let (gw, gh) = (f64::from(g.w.max(1)), f64::from(g.h.max(1)));
         let s = if imp.scale_mode.get() && g.w > 0 && g.h > 0 {
             (w / gw).min(h / gh)
         } else {
@@ -212,13 +216,13 @@ impl SurfaceView {
     pub(crate) fn widget_to_tree(&self, x: f64, y: f64) -> (f64, f64) {
         let (s, (ox, oy)) = self.mapping();
         let g = self.imp().geometry.get();
-        ((x - ox) / s + g.x as f64, (y - oy) / s + g.y as f64)
+        ((x - ox) / s + f64::from(g.x), (y - oy) / s + f64::from(g.y))
     }
 
     pub(crate) fn tree_to_widget(&self, x: f64, y: f64) -> (f64, f64) {
         let (s, (ox, oy)) = self.mapping();
         let g = self.imp().geometry.get();
-        ((x - g.x as f64) * s + ox, (y - g.y as f64) * s + oy)
+        ((x - f64::from(g.x)) * s + ox, (y - f64::from(g.y)) * s + oy)
     }
 
     fn with_root(&self, f: impl FnOnce(&EmbedServer, WlSurface)) {
@@ -244,13 +248,13 @@ impl SurfaceView {
             return;
         };
         if let Some(r) = info.rect {
-            let (x, y) = self.tree_to_widget(r.x as f64, r.y as f64);
+            let (x, y) = self.tree_to_widget(f64::from(r.x), f64::from(r.y));
             let (s, _) = self.mapping();
             imp.im.set_cursor_location(&gdk::Rectangle::new(
-                x as i32,
-                y as i32,
-                ((r.w as f64 * s) as i32).max(1),
-                ((r.h as f64 * s) as i32).max(1),
+                cast::px(x),
+                cast::px(y),
+                cast::px(f64::from(r.w) * s).max(1),
+                cast::px(f64::from(r.h) * s).max(1),
             ));
         }
         imp.im.set_input_purpose(info.purpose);
@@ -315,9 +319,9 @@ impl SurfaceView {
                 let _ = attrs;
                 let byte = text
                     .char_indices()
-                    .nth(cursor.max(0) as usize)
-                    .map(|(i, _)| i)
-                    .unwrap_or(text.len()) as i32;
+                    .nth(usize::try_from(cursor).unwrap_or(0))
+                    .map_or(text.len(), |(i, _)| i);
+                let byte = cast::sat_i32(byte);
                 sv.queue_im(|b| b.preedit = (text.to_string(), byte, byte));
             }
         ));
@@ -401,8 +405,12 @@ impl SurfaceView {
             glib::Propagation::Proceed,
             move |c, dx, dy| {
                 let time = c.current_event_time();
-                let wheel = c.unit() == gdk::ScrollUnit::Wheel;
-                sv.with_root(|s, root| s.pointer_axis(root, dx, dy, wheel, false, time));
+                let source = if c.unit() == gdk::ScrollUnit::Wheel {
+                    AxisSource::Wheel
+                } else {
+                    AxisSource::Finger
+                };
+                sv.with_root(|s, root| s.pointer_axis(root, dx, dy, source, time));
                 glib::Propagation::Stop
             }
         ));
@@ -411,11 +419,33 @@ impl SurfaceView {
             self,
             move |c| {
                 let time = c.current_event_time();
-                sv.with_root(|s, root| s.pointer_axis(root, 0.0, 0.0, false, true, time));
+                sv.with_root(|s, root| s.pointer_axis_stop(root, time));
             }
         ));
         self.add_controller(scroll);
 
+        self.setup_keys();
+
+        let focus = gtk4::EventControllerFocus::new();
+        focus.connect_enter(glib::clone!(
+            #[weak(rename_to = sv)]
+            self,
+            move |_| {
+                if sv.imp().ti_enabled.get() {
+                    sv.imp().im.focus_in();
+                }
+                sv.with_root(EmbedServer::keyboard_enter);
+            }
+        ));
+        focus.connect_leave(glib::clone!(
+            #[weak(rename_to = sv)]
+            self,
+            move |_| sv.release_keyboard()
+        ));
+        self.add_controller(focus);
+    }
+
+    fn setup_keys(&self) {
         let key = &self.imp().key;
         key.connect_key_pressed(glib::clone!(
             #[weak(rename_to = sv)]
@@ -434,7 +464,9 @@ impl SurfaceView {
                         alt: state.contains(gdk::ModifierType::ALT_MASK),
                         logo: state.contains(gdk::ModifierType::SUPER_MASK),
                     };
-                    sv.with_root(|s, root| s.key(root, keycode, kv, Some(mods), true, time));
+                    sv.with_root(|s, root| {
+                        s.key(root, keycode, kv, Some(mods), KeyState::Pressed, time);
+                    });
                 }
                 glib::Propagation::Stop
             }
@@ -452,29 +484,13 @@ impl SurfaceView {
                         .borrow_mut()
                         .remove(&keycode)
                         .unwrap_or_default();
-                    sv.with_root(|s, root| s.key(root, keycode, kv, None, false, time));
+                    sv.with_root(|s, root| {
+                        s.key(root, keycode, kv, None, KeyState::Released, time);
+                    });
                 }
             }
         ));
         self.add_controller(key.clone());
-
-        let focus = gtk4::EventControllerFocus::new();
-        focus.connect_enter(glib::clone!(
-            #[weak(rename_to = sv)]
-            self,
-            move |_| {
-                if sv.imp().ti_enabled.get() {
-                    sv.imp().im.focus_in();
-                }
-                sv.with_root(|s, root| s.keyboard_enter(root));
-            }
-        ));
-        focus.connect_leave(glib::clone!(
-            #[weak(rename_to = sv)]
-            self,
-            move |_| sv.release_keyboard()
-        ));
-        self.add_controller(focus);
     }
 
     /// Releases held keys and drops keyboard focus (GTK focus left).
@@ -488,7 +504,7 @@ impl SurfaceView {
         self.with_root(|s, root| {
             for k in keys {
                 let kv = keyvals.get(&k).copied().unwrap_or_default();
-                s.key(root.clone(), k, kv, None, false, 0);
+                s.key(root.clone(), k, kv, None, KeyState::Released, 0);
             }
             s.keyboard_leave(root);
         });
@@ -515,15 +531,20 @@ impl SurfaceView {
                     self.grab_focus();
                 }
                 let code = evdev_button(b.button());
-                self.with_root(|s, root| s.pointer_button(root, code, pressed, time));
+                let state = if pressed {
+                    ButtonState::Pressed
+                } else {
+                    ButtonState::Released
+                };
+                self.with_root(|s, root| s.pointer_button(root, code, state, time));
                 glib::Propagation::Stop
             }
             T::TouchBegin | T::TouchUpdate | T::TouchEnd | T::TouchCancel => {
-                let seq = ev.event_sequence().as_ptr() as usize;
+                let seq = ev.event_sequence().as_ptr().addr();
                 let imp = self.imp();
                 let slot = {
                     let mut slots = imp.touch_slots.borrow_mut();
-                    let next = slots.len() as i32;
+                    let next = cast::sat_u32(slots.len());
                     *slots.entry(seq).or_insert(next)
                 };
                 let pos = ev
@@ -538,12 +559,16 @@ impl SurfaceView {
                             return glib::Propagation::Proceed;
                         };
                         let (tx, ty) = self.widget_to_tree(x, y);
-                        let down = ev.event_type() == T::TouchBegin;
-                        self.with_root(|s, root| s.touch(root, slot, Some((tx, ty)), down, time));
+                        let event = if ev.event_type() == T::TouchBegin {
+                            Touch::Down(tx, ty)
+                        } else {
+                            Touch::Motion(tx, ty)
+                        };
+                        self.with_root(|s, root| s.touch(root, slot, event, time));
                     }
                     T::TouchEnd => {
                         imp.touch_slots.borrow_mut().remove(&seq);
-                        self.with_root(|s, root| s.touch(root, slot, None, false, time));
+                        self.with_root(|s, root| s.touch(root, slot, Touch::Up, time));
                     }
                     _ => {
                         imp.touch_slots.borrow_mut().clear();
@@ -562,9 +587,9 @@ impl SurfaceView {
         let (sx, sy) = native.surface_transform();
         let p = native.upcast_ref::<gtk4::Widget>().compute_point(
             self,
-            &graphene::Point::new((x - sx) as f32, (y - sy) as f32),
+            &graphene::Point::new(cast::gsk(x - sx), cast::gsk(y - sy)),
         )?;
-        Some((p.x() as f64, p.y() as f64))
+        Some((f64::from(p.x()), f64::from(p.y())))
     }
 }
 
@@ -575,19 +600,14 @@ fn delete_range(text: &str, cursor: i32, offset: i32, n_chars: i32) -> Option<(u
     if !text.is_char_boundary(cursor) {
         return None;
     }
-    let cursor_char = text[..cursor].chars().count() as i64;
-    let start = (cursor_char + offset as i64).max(0) as usize;
-    let end = start + n_chars.max(0) as usize;
-    let byte = |c: usize| {
-        text.char_indices()
-            .nth(c)
-            .map(|(i, _)| i)
-            .unwrap_or(text.len())
-    };
+    let cursor_char = text[..cursor].chars().count();
+    let start = cursor_char.saturating_add_signed(isize::try_from(offset).ok()?);
+    let end = start.saturating_add(usize::try_from(n_chars).unwrap_or(0));
+    let byte = |c: usize| text.char_indices().nth(c).map_or(text.len(), |(i, _)| i);
     let (start, end) = (byte(start), byte(end));
     let before = cursor.saturating_sub(start.min(cursor));
     let after = end.max(cursor) - cursor;
-    Some((before as u32, after as u32))
+    Some((cast::sat_u32(before), cast::sat_u32(after)))
 }
 
 struct Kid {
@@ -597,7 +617,13 @@ struct Kid {
 }
 
 mod imp {
-    use super::*;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+
+    use super::{
+        Cell, EmbedServer, HashMap, HashSet, ImBatch, Kid, ObjectId, Placed, Rect, RefCell,
+        WlSurface, cast, glib, graphene, gsk,
+    };
 
     pub(crate) struct SurfaceView {
         pub(super) server: RefCell<Option<EmbedServer>>,
@@ -616,7 +642,7 @@ mod imp {
         pub(super) pressed: RefCell<HashSet<u32>>,
         /// Keysym (and lowercase) of each held key, for the release.
         pub(super) keyvals: RefCell<HashMap<u32, (u32, u32)>>,
-        pub(super) touch_slots: RefCell<HashMap<usize, i32>>,
+        pub(super) touch_slots: RefCell<HashMap<usize, u32>>,
         pub(super) swallow_release: Cell<bool>,
     }
 
@@ -684,22 +710,22 @@ mod imp {
 
         fn size_allocate(&self, _width: i32, _height: i32, _baseline: i32) {
             let obj = self.obj();
-            let (s, (ox, oy)) = obj.mapping();
-            let g = self.geometry.get();
+            let (scale, (ox, oy)) = obj.mapping();
+            let geom = self.geometry.get();
             let kids = self.kids.borrow();
             for p in self.order.borrow().iter() {
                 let Some(kid) = kids.get(&p.id) else {
                     continue;
                 };
-                let x = (p.loc.0 - g.x) as f64 * s + ox;
-                let y = (p.loc.1 - g.y) as f64 * s + oy;
-                let mut t =
-                    gsk::Transform::new().translate(&graphene::Point::new(x as f32, y as f32));
-                if (s - 1.0).abs() > f64::EPSILON {
-                    t = t.scale(s as f32, s as f32);
+                let x = f64::from(p.loc.0 - geom.x) * scale + ox;
+                let y = f64::from(p.loc.1 - geom.y) * scale + oy;
+                let mut transform = gsk::Transform::new()
+                    .translate(&graphene::Point::new(cast::gsk(x), cast::gsk(y)));
+                if (scale - 1.0).abs() > f64::EPSILON {
+                    transform = transform.scale(cast::gsk(scale), cast::gsk(scale));
                 }
                 kid.offload
-                    .allocate(p.size.0.max(0), p.size.1.max(0), -1, Some(t));
+                    .allocate(p.size.0.max(0), p.size.1.max(0), -1, Some(transform));
             }
         }
     }
@@ -721,7 +747,8 @@ mod tests {
     fn delete_range_vietnamese() {
         // "việt|": 'ệ' is 3 bytes; delete the last 2 chars ("ệt").
         let t = "việt";
-        assert_eq!(delete_range(t, t.len() as i32, -2, 2), Some((4, 0)));
+        let len = i32::try_from(t.len()).unwrap();
+        assert_eq!(delete_range(t, len, -2, 2), Some((4, 0)));
         assert_eq!(delete_range(t, 3, -1, 1), None); // not a char boundary
     }
 }

@@ -6,11 +6,11 @@
 //!
 //! Why not `pipewire-rs`: it would build here (libpipewire 1.6 + clang), but
 //! volume on hardware sinks/sources lives in the *device route*, which
-//! WirePlumber's mixer API manages; reimplementing that with raw PipeWire
+//! `WirePlumber`'s mixer API manages; reimplementing that with raw `PipeWire`
 //! pods is a lot of code for the same result. `pw-dump`/`wpctl` ship with
 //! PipeWire/WirePlumber and the plan (§2) allows them for this stage.
 //!
-//! Volumes are WirePlumber's "cubic" scale, same as `wpctl get-volume`
+//! Volumes are `WirePlumber`'s "cubic" scale, same as `wpctl get-volume`
 //! (1.0 = 100 %).
 
 use std::collections::HashMap;
@@ -65,7 +65,7 @@ pub fn start() -> Result<Rc<Service>> {
     let pusher = svc.pusher();
     std::thread::Builder::new()
         .name("hw-audio".into())
-        .spawn(move || worker(pusher))?;
+        .spawn(move || worker(&pusher))?;
     Ok(svc)
 }
 
@@ -104,12 +104,12 @@ fn wpctl(args: &[&str]) -> Result<Value> {
     Ok(Value::Null)
 }
 
-fn worker(pusher: Pusher) {
+fn worker(pusher: &Pusher) {
     loop {
         if pusher.is_closed() {
             return;
         }
-        match run_dump(&pusher) {
+        match run_dump(pusher) {
             Ok(false) => return,
             Ok(true) => {}
             Err(e) => tracing::warn!("hw.service.audio: pw-dump: {e:#}"),
@@ -151,7 +151,7 @@ fn run_dump(pusher: &Pusher) -> Result<bool> {
     Ok(alive)
 }
 
-/// PipeWire objects by id, as `pw-dump` prints them.
+/// `PipeWire` objects by id, as `pw-dump` prints them.
 #[derive(Default)]
 struct Graph {
     objects: HashMap<u64, Value>,
@@ -232,7 +232,7 @@ impl Graph {
         let volume = if vols.is_empty() {
             0.0
         } else {
-            vols.iter().sum::<f64>() / vols.len() as f64
+            vols.iter().sum::<f64>() / crate::num::usize_to_f64(vols.len())
         };
         let name = s("node.name");
         let mut m = Map::new();
@@ -291,7 +291,7 @@ impl Graph {
             match n["info"]["props"]["media.class"].as_str().unwrap_or("") {
                 "Audio/Sink" => sinks.push(self.node_json(n, "sink", def_sink)),
                 "Audio/Source" | "Audio/Source/Virtual" => {
-                    sources.push(self.node_json(n, "source", def_source))
+                    sources.push(self.node_json(n, "source", def_source));
                 }
                 "Stream/Output/Audio" => streams.push(self.node_json(n, "playback", None)),
                 "Stream/Input/Audio" => recorders.push(self.node_json(n, "record", None)),
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(s["speaker"]["volume"], json!(1.0));
         assert_eq!(s["speaker"]["mute"], json!(true));
         g.apply(vec![json!({ "id": 77, "info": null })]);
-        assert!(snap(&g)["streams"].as_array().unwrap().is_empty());
+        assert_eq!(snap(&g)["streams"], json!([]));
         // Default sink switch.
         g.apply(vec![
             json!({ "id": 41, "type": "PipeWire:Interface:Metadata",

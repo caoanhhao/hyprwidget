@@ -15,7 +15,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 use serde_json::{Map, Value, json};
 
@@ -223,7 +223,7 @@ pub fn insert<S: AsRef<str>>(tree: &mut Value, path: &[S], value: Value) {
         }
         cur = cur
             .as_object_mut()
-            .unwrap()
+            .expect("cur was just made an object")
             .entry(k.as_ref())
             .or_insert_with(|| Value::Object(Map::new()));
     }
@@ -231,7 +231,7 @@ pub fn insert<S: AsRef<str>>(tree: &mut Value, path: &[S], value: Value) {
         *cur = Value::Object(Map::new());
     }
     cur.as_object_mut()
-        .unwrap()
+        .expect("cur was just made an object")
         .insert(last.as_ref().to_owned(), value);
 }
 
@@ -309,22 +309,22 @@ pub fn from_getoption(reply: &Value) -> Option<Value> {
 /// `"6"`, `"6 8"`, `"1 2 3"`, `"1 2 3 4"` (CSS shorthand) → number or
 /// `{top,right,bottom,left}`.
 pub fn parse_gaps(s: &str) -> Option<Value> {
-    let n: Vec<i64> = s
+    let nums: Vec<i64> = s
         .split_whitespace()
         .map(str::parse)
         .collect::<Result<_, _>>()
         .ok()?;
-    let [t, r, b, l] = match n.as_slice() {
-        [a] => [*a; 4],
-        [a, b] => [*a, *b, *a, *b],
-        [a, b, c] => [*a, *b, *c, *b],
-        [a, b, c, d] => [*a, *b, *c, *d],
+    let [top, right, bottom, left] = match nums.as_slice() {
+        [all] => [*all; 4],
+        [vert, horiz] => [*vert, *horiz, *vert, *horiz],
+        [top, horiz, bottom] => [*top, *horiz, *bottom, *horiz],
+        [top, right, bottom, left] => [*top, *right, *bottom, *left],
         _ => return None,
     };
-    if t == r && r == b && b == l {
-        Some(json!(t))
+    if top == right && right == bottom && bottom == left {
+        Some(json!(top))
     } else {
-        Some(json!({ "top": t, "right": r, "bottom": b, "left": l }))
+        Some(json!({ "top": top, "right": right, "bottom": bottom, "left": left }))
     }
 }
 
@@ -337,7 +337,15 @@ pub fn normalize(name: &str, v: &Value) -> Result<Value, String> {
     let bad = || Err(format!("option '{name}' expects {}, got {v}", ty.name()));
     match ty {
         OptType::Int => match v.as_f64().filter(|f| f.fract() == 0.0) {
-            Some(f) => Ok(json!(f as i64)),
+            Some(f) => {
+                #[expect(
+                    clippy::as_conversions,
+                    clippy::cast_possible_truncation,
+                    reason = "f is integral; out-of-range values saturate"
+                )]
+                let i = f as i64;
+                Ok(json!(i))
+            }
             None => bad(),
         },
         OptType::Float if v.is_number() => Ok(v.clone()),
@@ -350,9 +358,8 @@ pub fn normalize(name: &str, v: &Value) -> Result<Value, String> {
         },
         OptType::Str if v.is_string() => Ok(v.clone()),
         OptType::Gaps => match v {
-            Value::Number(_) => Ok(v.clone()),
+            Value::Number(_) | Value::Object(_) => Ok(v.clone()),
             Value::String(s) => parse_gaps(s).map_or_else(bad, Ok),
-            Value::Object(_) => Ok(v.clone()),
             _ => bad(),
         },
         OptType::Gradient => match v.as_str().map(color::to_css) {
@@ -374,7 +381,7 @@ pub fn defaults() -> Value {
     for (name, ty, _, def) in INHERITED {
         let v: Value = serde_json::from_str(def).expect("valid default");
         let v = if *ty == OptType::Gradient {
-            normalize(name, &v).unwrap()
+            normalize(name, &v).expect("built-in gradient defaults are valid")
         } else {
             v
         };
@@ -493,7 +500,7 @@ pub fn animations_tree(reply: &Value) -> Value {
         );
     }
     let mut tree = json!({ "bezier": bez, "animation": out });
-    finish_animations(&mut tree, true);
+    finish_animations(&mut tree, GlobalAnimations::Enabled);
     tree
 }
 
@@ -501,15 +508,22 @@ fn cubic([x0, y0, x1, y1]: [f64; 4]) -> String {
     format!("cubic-bezier({x0}, {y0}, {x1}, {y1})")
 }
 
+/// Whether `animations:enabled` is on for the whole tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GlobalAnimations {
+    Enabled,
+    Disabled,
+}
+
 /// Fills `duration` (ms, Hyprland speed is in 100 ms units) and `easing`
 /// (CSS `cubic-bezier`) for every animation of an `animations` subtree.
-fn finish_animations(anims: &mut Value, globally_enabled: bool) {
+fn finish_animations(anims: &mut Value, global: GlobalAnimations) {
     let beziers = anims.get("bezier").cloned().unwrap_or(json!({}));
     let Some(list) = anims.get_mut("animation").and_then(Value::as_object_mut) else {
         return;
     };
     for a in list.values_mut() {
-        let enabled = globally_enabled && a["enabled"].as_bool().unwrap_or(true);
+        let enabled = global == GlobalAnimations::Enabled && a["enabled"].as_bool().unwrap_or(true);
         let speed = a["speed"].as_f64().unwrap_or(8.0);
         let bezier = a["bezier"].as_str().unwrap_or("default");
         let easing = beziers
@@ -521,8 +535,14 @@ fn finish_animations(anims: &mut Value, globally_enabled: bool) {
         } else {
             0.0
         };
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            reason = "duration is rounded; out-of-range values saturate"
+        )]
+        let duration = duration as i64;
         if let Some(o) = a.as_object_mut() {
-            o.insert("duration".into(), json!(duration as i64));
+            o.insert("duration".into(), json!(duration));
             o.insert("easing".into(), easing);
         }
     }
@@ -539,6 +559,19 @@ pub struct Options {
     resolvers: RefCell<Vec<(Vec<String>, Resolver)>>,
     tree: Signal<Value>,
     signals: RefCell<HashMap<String, Signal<Value>>>,
+}
+
+impl fmt::Debug for Options {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Options")
+            .field("defaults", &self.defaults)
+            .field("hypr", &self.hypr)
+            .field("user", &self.user)
+            .field("resolvers", &self.resolvers.borrow().len())
+            .field("tree", &self.tree)
+            .field("signals", &self.signals)
+            .finish()
+    }
 }
 
 impl Default for Options {
@@ -590,10 +623,14 @@ impl Options {
                 insert(&mut t, path, v);
             }
         }
-        let enabled =
-            lookup(&t, &["animations", "enabled"]).and_then(Value::as_bool) != Some(false);
+        let global =
+            if lookup(&t, &["animations", "enabled"]).and_then(Value::as_bool) == Some(false) {
+                GlobalAnimations::Disabled
+            } else {
+                GlobalAnimations::Enabled
+            };
         if let Some(a) = t.get_mut("animations") {
-            finish_animations(a, enabled);
+            finish_animations(a, global);
         }
         t
     }

@@ -7,6 +7,7 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -70,13 +71,45 @@ pub struct Core {
     pub theme: crate::theme::Theme,
 }
 
+impl std::fmt::Debug for Ui {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Ui")
+            .field("app", &self.app)
+            .field("monitors", &self.monitors)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Core {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Core")
+            .field("dir", &self.dir)
+            .field("app_cfg", &self.app_cfg)
+            .field("ui", &self.ui)
+            .field("layer_ns", &self.layer_ns)
+            .field("all_ns", &self.all_ns)
+            .field("extra_rules", &self.extra_rules)
+            .field("services", &self.services)
+            .field("scss_partials", &self.scss_partials)
+            .field("theme", &self.theme)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Whether [`Core::new`] reads the running Hyprland's options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HyprOptions {
+    Inherit,
+    /// Off in tests.
+    Ignore,
+}
+
 impl Core {
-    /// `inherit_hypr`: read the running Hyprland's options (off in tests).
-    pub fn new(dir: ConfigDir, ui: Option<Ui>, inherit_hypr: bool) -> anyhow::Result<Rc<Self>> {
+    pub fn new(dir: ConfigDir, ui: Option<Ui>, hypr: HyprOptions) -> anyhow::Result<Rc<Self>> {
         let app_cfg = dir.load_app()?;
         let settings = Settings::load(app_cfg.settings_file.clone())?;
         let options = Options::new();
-        if inherit_hypr && hyprland::available() {
+        if hypr == HyprOptions::Inherit && hyprland::available() {
             match hyprland::fetch_tree() {
                 Ok(t) => options.set_hypr(t),
                 Err(e) => tracing::warn!("reading Hyprland options: {e:#}"),
@@ -91,9 +124,9 @@ impl Core {
             layer_ns: RefCell::default(),
             all_ns: RefCell::default(),
             extra_rules: RefCell::default(),
-            services: Default::default(),
-            scss_partials: Default::default(),
-            theme: Default::default(),
+            services: crate::service::Services::default(),
+            scss_partials: RefCell::default(),
+            theme: crate::theme::Theme::default(),
         }))
     }
 
@@ -162,6 +195,7 @@ impl Core {
 type MonitorWindows = (gtk4::gdk::Monitor, Vec<String>);
 
 /// Per-Lua-state data, reachable from Lua callbacks through app data.
+#[derive(Debug)]
 pub struct RtState {
     pub core: Rc<Core>,
     pub(crate) user_opts: RefCell<serde_json::Value>,
@@ -273,6 +307,7 @@ pub fn compact_error(msg: &str) -> String {
 }
 
 /// A loaded `hyprwidget.lua`.
+#[derive(Debug)]
 pub struct Runtime {
     pub lua: Lua,
     pub st: Rc<RtState>,
@@ -297,7 +332,7 @@ impl Runtime {
             loading: Cell::new(true),
             window_seq: Cell::new(0),
         });
-        lua.set_app_data(st.clone());
+        lua.set_app_data(Rc::clone(&st));
         install(&lua, &st).map_err(|e| anyhow::anyhow!("installing hw API: {e}"))?;
         Ok(Self { lua, st })
     }
@@ -316,7 +351,7 @@ impl Runtime {
                 .set_name(format!("@{}", entry.display()));
             let ret: Value = chunk.call(())?;
             self.st.loading.set(false);
-            self.apply_options()?;
+            self.apply_options();
             self.handle_entry_return(ret)?;
             self.start_per_monitor()?;
             Ok(())
@@ -347,8 +382,8 @@ impl Runtime {
 
     /// Pushes the user option layer (config.json, then `hw.config` calls)
     /// into the option store.
-    pub fn apply_options(&self) -> Result<()> {
-        apply_options(&self.lua, &self.st)
+    pub fn apply_options(&self) {
+        apply_options(&self.lua, &self.st);
     }
 
     fn start_per_monitor(&self) -> Result<()> {
@@ -384,7 +419,7 @@ impl Runtime {
         let vals = res.map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(vals
             .into_iter()
-            .map(|v| display(&self.lua, v))
+            .map(|v| display(&self.lua, &v))
             .collect::<Vec<_>>()
             .join("\t"))
     }
@@ -402,7 +437,7 @@ impl Runtime {
                 if let Some(r) = reply.borrow_mut().take() {
                     let text = match v {
                         Value::Nil => String::new(),
-                        v => display(lua, v),
+                        v => display(lua, &v),
                     };
                     r(ok, text);
                 }
@@ -439,7 +474,7 @@ impl Drop for Runtime {
 
 /// Pushes the user option layer (config.json, then `hw.config` calls) into
 /// the option store.
-pub(crate) fn apply_options(lua: &Lua, st: &RtState) -> Result<()> {
+pub(crate) fn apply_options(lua: &Lua, st: &RtState) {
     let json_opts = st.core.app_cfg.borrow().options.clone();
     let mut user = normalize_tree(
         &json_opts,
@@ -465,7 +500,6 @@ pub(crate) fn apply_options(lua: &Lua, st: &RtState) -> Result<()> {
         })
         .collect();
     st.core.options.set_user(user, resolvers);
-    Ok(())
 }
 
 /// Stores and writes the generated partial `_<name>.scss`, recompiling the
@@ -632,7 +666,7 @@ struct SettingsUd;
 
 fn settings_signal(lua: &Lua, key: &str) -> Result<LuaSignal> {
     let st = RtState::get(lua)?;
-    let s = st.core.settings.clone();
+    let s = Rc::clone(&st.core.settings);
     let k = key.to_owned();
     let setter: JsonSetter = Rc::new(move |v| s.set(&k, v).map(|_| ()));
     Ok(LuaSignal::json(st.core.settings.signal(key), Some(setter)))
@@ -735,7 +769,7 @@ fn spawn_process(
     argv: &[std::ffi::OsString],
     flags: gio::SubprocessFlags,
 ) -> Result<gio::Subprocess> {
-    let refs: Vec<&std::ffi::OsStr> = argv.iter().map(|s| s.as_os_str()).collect();
+    let refs: Vec<&std::ffi::OsStr> = argv.iter().map(std::ffi::OsString::as_os_str).collect();
     gio::Subprocess::newv(&refs, flags)
         .map_err(|e| mlua::Error::runtime(format!("{:?}: {e}", argv.first())))
 }
@@ -779,6 +813,10 @@ fn exec_cb(lua: &Lua, (cmd, cb): (Value, Function)) -> Result<()> {
 }
 
 /// Installs `hw`, `W`-style helpers and globals.
+#[expect(
+    clippy::too_many_lines,
+    reason = "flat list of `hw.*` API registrations, grouped by comments"
+)]
 fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     let g = lua.globals();
     let root = st.core.dir.root.clone();
@@ -800,7 +838,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     g.set(
         "print",
         lua.create_function(|lua, args: Variadic<Value>| {
-            let s: Vec<String> = args.into_iter().map(|v| display(lua, v)).collect();
+            let s: Vec<String> = args.into_iter().map(|v| display(lua, &v)).collect();
             tracing::info!(target: "lua", "{}", s.join("\t"));
             Ok(())
         })?,
@@ -809,7 +847,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     hw.set(
         "_traceback",
         lua.create_function(|lua, msg: Value| {
-            let mut out = display(lua, msg);
+            let mut out = display(lua, &msg);
             out.push_str("\nstack traceback:");
             for level in 1..16 {
                 let Some(frame) = lua.inspect_stack(level, |d| {
@@ -825,10 +863,10 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
                 if frame.0 == "[C]" || frame.0.starts_with("hw.prelude") {
                     continue;
                 }
-                match frame.1 {
-                    Some(l) => out.push_str(&format!("\n\t{}:{l}", frame.0)),
-                    None => out.push_str(&format!("\n\t{}", frame.0)),
-                }
+                let _ = match frame.1 {
+                    Some(l) => write!(out, "\n\t{}:{l}", frame.0),
+                    None => write!(out, "\n\t{}", frame.0),
+                };
             }
             Ok(out)
         })?,
@@ -902,7 +940,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     // hw.now() -> monotonic seconds (float), for durations / frame timing.
     hw.set(
         "now",
-        lua.create_function(|_, ()| Ok(glib::monotonic_time() as f64 / 1e6))?,
+        lua.create_function(|_, ()| Ok(crate::convert::int_to_f64(glib::monotonic_time()) / 1e6))?,
     )?;
     hw.set(
         "timeout",
@@ -910,7 +948,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
             let st = RtState::get(lua)?;
             let weak = lua.weak();
             let id_cell = Rc::new(Cell::new(None::<u64>));
-            let idc = id_cell.clone();
+            let idc = Rc::clone(&id_cell);
             let src = glib::timeout_add_local_once(Duration::from_millis(ms), move || {
                 let Some(lua) = weak.try_upgrade() else {
                     return;
@@ -955,7 +993,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
             let out = std::process::Command::new(prog)
                 .args(rest)
                 .output()
-                .map_err(|e| mlua::Error::runtime(format!("{prog:?}: {e}")))?;
+                .map_err(|e| mlua::Error::runtime(format!("\"{}\": {e}", prog.display())))?;
             if !out.status.success() {
                 return Err(mlua::Error::runtime(
                     String::from_utf8_lossy(&out.stderr).trim().to_string(),
@@ -1035,7 +1073,10 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
         })?,
     )?;
     hw.set("json", json)?;
-    hw.set("config", lua.create_function(hw_config)?)?;
+    hw.set(
+        "config",
+        lua.create_function(|lua, t: Table| hw_config(lua, &t))?,
+    )?;
     crate::custom::install(lua, &hw)?;
     hw.set(
         "layer_rule",
@@ -1193,7 +1234,10 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
         "_is_kind",
         lua.create_function(|_, name: String| Ok(Kind::from_name(&name).is_some()))?,
     )?;
-    hw.set("layout", lua.create_function(builder::load_layout)?)?;
+    hw.set(
+        "layout",
+        lua.create_function(|lua, path: String| builder::load_layout(lua, &path))?,
+    )?;
     hw.set(
         "quit",
         lua.create_function(|lua, ()| {
@@ -1263,11 +1307,11 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
 
 /// `hw.config({...})`: deep-merges into the user option layer in load
 /// order. Values: constants, `"inherit"`, or `function(h)`.
-fn hw_config(lua: &Lua, t: Table) -> Result<()> {
+fn hw_config(lua: &Lua, t: &Table) -> Result<()> {
     let st = RtState::get(lua)?;
     let loc = caller(lua);
     let mut diags = Vec::new();
-    walk_config(lua, &st, &t, &mut Vec::new(), &loc, &mut diags)?;
+    walk_config(lua, &st, t, &mut Vec::new(), &loc, &mut diags)?;
     st.diagnostics.borrow_mut().extend(diags);
     Ok(())
 }
@@ -1281,8 +1325,8 @@ fn walk_config(
     diags: &mut Vec<String>,
 ) -> Result<()> {
     for pair in t.pairs::<Value, Value>() {
-        let (k, v) = pair?;
-        let key = match k {
+        let (raw_key, v) = pair?;
+        let key = match raw_key {
             Value::String(s) => s.to_str()?.to_string(),
             other => {
                 diags.push(format!(
@@ -1299,22 +1343,22 @@ fn walk_config(
             Value::Table(sub) if sub.raw_len() == 0 && options::inherited(&name).is_none() => {
                 walk_config(lua, st, &sub, path, loc, diags)?;
             }
-            Value::Function(f) => {
+            Value::Function(resolver) => {
                 st.option_locs
                     .borrow_mut()
                     .push((name.clone(), loc.to_owned()));
-                st.resolvers.borrow_mut().push((path.clone(), f));
+                st.resolvers.borrow_mut().push((path.clone(), resolver));
                 options::insert(&mut st.user_opts.borrow_mut(), path, json!("inherit"));
             }
             v => {
                 st.option_locs
                     .borrow_mut()
                     .push((name.clone(), loc.to_owned()));
-                let j = lua_to_json(lua, v)?;
-                let j = if j.as_str() == Some("inherit") {
-                    j
+                let raw = lua_to_json(lua, v)?;
+                let value = if raw.as_str() == Some("inherit") {
+                    raw
                 } else {
-                    match options::normalize(&name, &j) {
+                    match options::normalize(&name, &raw) {
                         Ok(n) => n,
                         Err(e) => {
                             diags.push(format!("{loc}: {e}"));
@@ -1325,7 +1369,7 @@ fn walk_config(
                 };
                 st.resolvers.borrow_mut().retain(|(p, _)| p != path);
                 let mut nested = json!({});
-                options::insert(&mut nested, path, j);
+                options::insert(&mut nested, path, value);
                 options::deep_merge(&mut st.user_opts.borrow_mut(), &nested);
                 if nested_is_inherit(&nested, path) {
                     // `"inherit"` resets an earlier constant.
@@ -1364,7 +1408,6 @@ fn lua_literal(v: &Value, depth: usize) -> String {
         return "nil".into();
     }
     match v {
-        Value::Nil => "nil".into(),
         Value::Boolean(b) => b.to_string(),
         Value::Integer(i) => i.to_string(),
         Value::Number(n) => n.to_string(),

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use hw_core::config::ConfigDir;
 use serde_json::{Value, json};
@@ -23,11 +24,11 @@ fn config_dir(name: &str, files: &[(&str, &str)]) -> ConfigDir {
 }
 
 fn load(dir: ConfigDir, hypr: Option<Value>) -> (std::rc::Rc<Core>, Runtime) {
-    let core = Core::new(dir, None, false).unwrap();
+    let core = Core::new(dir, None, crate::runtime::HyprOptions::Ignore).unwrap();
     if let Some(h) = hypr {
         core.options.set_hypr(h);
     }
-    let rt = Runtime::new(core.clone()).unwrap();
+    let rt = Runtime::new(Rc::clone(&core)).unwrap();
     rt.load().unwrap();
     (core, rt)
 }
@@ -57,7 +58,7 @@ fn hyprland_style_config_merges_in_load_order() {
             ),
             (
                 "config/decoration.lua",
-                r#"hw.config({ decoration = { rounding = 8, blur = { size = 3 } } })"#,
+                r"hw.config({ decoration = { rounding = 8, blur = { size = 3 } } })",
             ),
             // custom/ overrides win (loaded last), flat key form.
             (

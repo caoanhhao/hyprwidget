@@ -1,4 +1,4 @@
-//! Battery via UPower's `DisplayDevice` (system bus).
+//! Battery via `UPower`'s `DisplayDevice` (system bus).
 
 use std::cell::OnceCell;
 use std::rc::Rc;
@@ -13,8 +13,12 @@ const ROOT: &str = "/org/freedesktop/UPower";
 const DISPLAY: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors UPower device properties, serialized to Lua as flat booleans"
+)]
 pub struct Battery {
-    /// UPower answered (false when the daemon is missing).
+    /// `UPower` answered (false when the daemon is missing).
     pub available: bool,
     pub is_present: bool,
     /// 0–100.
@@ -64,6 +68,14 @@ pub struct UPower {
     pub battery: Signal<Battery>,
 }
 
+impl std::fmt::Debug for UPower {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UPower")
+            .field("battery", &self.battery.peek())
+            .finish()
+    }
+}
+
 thread_local! {
     static INSTANCE: OnceCell<Rc<UPower>> = const { OnceCell::new() };
 }
@@ -71,7 +83,7 @@ thread_local! {
 /// Started on first use (main thread only).
 pub fn get() -> Rc<UPower> {
     INSTANCE.with(|i| {
-        i.get_or_init(|| {
+        Rc::clone(i.get_or_init(|| {
             let this = Rc::new(UPower {
                 battery: Signal::new(Battery {
                     state: "unknown",
@@ -81,8 +93,7 @@ pub fn get() -> Rc<UPower> {
             });
             start(&this);
             this
-        })
-        .clone()
+        }))
     })
 }
 

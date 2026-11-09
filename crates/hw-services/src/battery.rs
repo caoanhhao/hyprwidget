@@ -1,5 +1,5 @@
 //! `hw.service.battery`: batteries and AC from `/sys/class/power_supply`,
-//! polled every 10 s. (UPower over D-Bus is the `upower` service; this one
+//! polled every 10 s. (`UPower` over D-Bus is the `upower` service; this one
 //! needs no daemon.)
 
 use std::path::Path;
@@ -33,11 +33,11 @@ pub fn start() -> Result<Rc<Service>> {
     let pusher = svc.pusher();
     std::thread::Builder::new()
         .name("hw-battery".into())
-        .spawn(move || worker(pusher))?;
+        .spawn(move || worker(&pusher))?;
     Ok(svc)
 }
 
-fn worker(pusher: Pusher) {
+fn worker(pusher: &Pusher) {
     loop {
         std::thread::sleep(INTERVAL);
         for (p, v) in sample(Path::new(ROOT)) {

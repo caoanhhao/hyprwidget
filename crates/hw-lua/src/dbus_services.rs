@@ -114,13 +114,12 @@ pub fn register(lua: &Lua, name: &str, ctor: Function) -> Result<()> {
 
 /// Installs `hw.service` (keeping an existing table) and our services.
 pub fn install(lua: &Lua, hw: &Table) -> Result<()> {
-    let service = match hw.get::<Value>("service")? {
-        Value::Table(t) => t,
-        _ => {
-            let t = lua.create_table()?;
-            hw.set("service", &t)?;
-            t
-        }
+    let service = if let Value::Table(t) = hw.get::<Value>("service")? {
+        t
+    } else {
+        let t = lua.create_table()?;
+        hw.set("service", &t)?;
+        t
     };
     let ctors = lua.create_table()?;
     lua.set_named_registry_value(CTORS, &ctors)?;
@@ -189,7 +188,7 @@ fn notifd_table(lua: &Lua) -> Result<Table> {
     let n = notifd::get();
     let t = lua.create_table()?;
     t.set("notifications", sig(n.notifications.clone()))?;
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     t.set(
         "dnd",
         LuaSignal(Rc::new(WritableSource {
@@ -202,22 +201,22 @@ fn notifd_table(lua: &Lua) -> Result<Table> {
     )?;
     t.set("active", sig(n.active.clone()))?;
 
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     method!(lua, t, "dismiss", |_, id: u32| {
         n2.dismiss(id);
         Ok(())
     });
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     method!(lua, t, "close", |_, id: u32| {
         n2.close(id, notifd::CloseReason::Closed);
         Ok(())
     });
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     method!(lua, t, "invoke", |_, (id, action): (u32, String)| {
         n2.invoke(id, &action);
         Ok(())
     });
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     t.set(
         "clear",
         lua.create_function(move |_, _self: Value| {
@@ -225,25 +224,25 @@ fn notifd_table(lua: &Lua) -> Result<Table> {
             Ok(())
         })?,
     )?;
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     method!(lua, t, "get", |lua, id: u32| match n2.get(id) {
         Some(n) => to_lua(lua, &n),
         None => Ok(Value::Nil),
     });
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     method!(lua, t, "set_dnd", |_, on: bool| {
         n2.set_dnd(on);
         Ok(())
     });
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     method!(lua, t, "set_ignore_timeout", |_, on: bool| {
         n2.ignore_timeout.set(on);
         Ok(())
     });
     // `notifd:on_notified(function(n, replaced) end)` → unsubscribe fn.
-    let n2 = n.clone();
+    let n2 = Rc::clone(&n);
     method!(lua, t, "on_notified", |lua, f: Function| {
-        let (weak, n3) = (lua.weak(), n2.clone());
+        let (weak, n3) = (lua.weak(), Rc::clone(&n2));
         let sub = n2.notified.subscribe(move |&(id, replaced)| {
             let (Some(lua), Some(n)) = (weak.try_upgrade(), n3.get(id)) else {
                 return;
@@ -256,7 +255,7 @@ fn notifd_table(lua: &Lua) -> Result<Table> {
     });
     // `notifd:on_resolved(function(id, reason) end)`; reason is
     // `expired`, `dismissed`, `closed` or `undefined`.
-    let n2 = n.clone();
+    let n2 = n;
     method!(lua, t, "on_resolved", |lua, f: Function| {
         let weak = lua.weak();
         let sub = n2.resolved.subscribe(move |(id, reason)| {
@@ -276,7 +275,7 @@ fn mpris_table(lua: &Lua) -> Result<Table> {
     let m = mpris::get();
     let t = lua.create_table()?;
     t.set("players", sig(m.players.clone()))?;
-    let m2 = m.clone();
+    let m2 = Rc::clone(&m);
     method!(lua, t, "position", |_, bus: String| Ok(sig(
         m2.position(&bus)
     )));
@@ -293,27 +292,27 @@ fn mpris_table(lua: &Lua) -> Result<Table> {
         "play_pause" => play_pause, "play" => play, "pause" => pause, "stop" => stop,
         "next" => next, "previous" => previous, "raise" => raise
     );
-    let m2 = m.clone();
+    let m2 = Rc::clone(&m);
     method!(lua, t, "seek", |_, (bus, secs): (String, f64)| {
         m2.seek(&bus, secs);
         Ok(())
     });
-    let m2 = m.clone();
+    let m2 = Rc::clone(&m);
     method!(lua, t, "set_position", |_, (bus, secs): (String, f64)| {
         m2.set_position(&bus, secs);
         Ok(())
     });
-    let m2 = m.clone();
+    let m2 = Rc::clone(&m);
     method!(lua, t, "set_volume", |_, (bus, v): (String, f64)| {
         m2.set_volume(&bus, v);
         Ok(())
     });
-    let m2 = m.clone();
+    let m2 = Rc::clone(&m);
     method!(lua, t, "set_shuffle", |_, (bus, on): (String, bool)| {
         m2.set_shuffle(&bus, on);
         Ok(())
     });
-    let m2 = m.clone();
+    let m2 = m;
     method!(
         lua,
         t,
@@ -326,12 +325,13 @@ fn mpris_table(lua: &Lua) -> Result<Table> {
     Ok(t)
 }
 
+#[expect(clippy::too_many_lines, reason = "flat list of tray method bindings")]
 fn tray_table(lua: &Lua) -> Result<Table> {
     let tr = tray::get();
     let t = lua.create_table()?;
     t.set("items", sig(tr.items.clone()))?;
     t.set("watcher_active", sig(tr.watcher_active.clone()))?;
-    let tr2 = tr.clone();
+    let tr2 = Rc::clone(&tr);
     method!(lua, t, "activate", |_,
                                  (id, x, y): (
         String,
@@ -341,7 +341,7 @@ fn tray_table(lua: &Lua) -> Result<Table> {
         tr2.activate(&id, x.unwrap_or(0), y.unwrap_or(0));
         Ok(())
     });
-    let tr2 = tr.clone();
+    let tr2 = Rc::clone(&tr);
     method!(lua, t, "secondary_activate", |_,
                                            (id, x, y): (
         String,
@@ -351,7 +351,7 @@ fn tray_table(lua: &Lua) -> Result<Table> {
         tr2.secondary_activate(&id, x.unwrap_or(0), y.unwrap_or(0));
         Ok(())
     });
-    let tr2 = tr.clone();
+    let tr2 = Rc::clone(&tr);
     method!(lua, t, "context_menu", |_,
                                      (id, x, y): (
         String,
@@ -361,7 +361,7 @@ fn tray_table(lua: &Lua) -> Result<Table> {
         tr2.context_menu(&id, x.unwrap_or(0), y.unwrap_or(0));
         Ok(())
     });
-    let tr2 = tr.clone();
+    let tr2 = Rc::clone(&tr);
     method!(lua, t, "scroll", |_,
                                (id, delta, o): (
         String,
@@ -371,7 +371,7 @@ fn tray_table(lua: &Lua) -> Result<Table> {
         tr2.scroll(&id, delta, o.as_deref().unwrap_or("vertical"));
         Ok(())
     });
-    let tr2 = tr.clone();
+    let tr2 = Rc::clone(&tr);
     method!(lua, t, "about_to_show", |_, id: String| {
         if let Some(m) = tr2.menu(&id) {
             m.about_to_show();
@@ -380,7 +380,7 @@ fn tray_table(lua: &Lua) -> Result<Table> {
     });
     // `tray:menu_layout(item.id)`: the menu tree as tables (nil until
     // loaded), for menus rendered in Lua.
-    let tr2 = tr.clone();
+    let tr2 = Rc::clone(&tr);
     method!(lua, t, "menu_layout", |lua, id: String| {
         match tr2.menu(&id).and_then(|m| m.root.borrow().clone()) {
             Some(root) => to_lua(lua, &root),
@@ -389,7 +389,7 @@ fn tray_table(lua: &Lua) -> Result<Table> {
     });
     // `tray:attach_menu(item.id, self)` in a MenuButton's `setup`: sets its
     // menu model and action group (kept in sync with the app).
-    let tr2 = tr.clone();
+    let tr2 = Rc::clone(&tr);
     method!(lua, t, "attach_menu", |_,
                                     (id, w): (
         String,
@@ -422,7 +422,7 @@ fn tray_table(lua: &Lua) -> Result<Table> {
         Ok(true)
     });
     // `tray:popup_menu(item.id, widget)`: shows the menu under any widget.
-    let tr2 = tr.clone();
+    let tr2 = tr;
     method!(lua, t, "popup_menu", |_,
                                    (id, w): (
         String,
@@ -490,7 +490,7 @@ fn power_profiles_table(lua: &Lua) -> Result<Table> {
     for name in ["available", "profiles", "performance_degraded"] {
         t.set(name, field(&p.state, name))?;
     }
-    let p2 = p.clone();
+    let p2 = Rc::clone(&p);
     let active = p.state.map(|s| s.active_profile.clone());
     t.set(
         "active_profile",
@@ -505,7 +505,7 @@ fn power_profiles_table(lua: &Lua) -> Result<Table> {
             }),
         })),
     )?;
-    let p2 = p.clone();
+    let p2 = p;
     method!(lua, t, "set_active_profile", |_, profile: String| {
         p2.set_active(&profile);
         Ok(())
