@@ -32,7 +32,8 @@ function M.write_json(path, value)
     print("write_json " .. path .. ": " .. tostring(err))
     return
   end
-  f:write(hw.json.encode(value, true))
+  -- An empty table is a list in every file we write.
+  f:write(type(value) == "table" and next(value) == nil and "[]" or hw.json.encode(value, true))
   f:close()
 end
 
@@ -71,6 +72,11 @@ function M.truncate(s, max)
   end
   local cut = utf8.offset(s, max)
   return s:sub(1, (cut or (max + 1)) - 1) .. "…"
+end
+
+--- Single-quotes `s` for sh.
+function M.sh_quote(s)
+  return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
 end
 
 function M.trim(s)

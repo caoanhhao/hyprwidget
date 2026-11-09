@@ -7,6 +7,7 @@ require_all({
   "bar",
   "services",
   "notifications",
+  "launcher",
 })
 
 require_custom_dir()
