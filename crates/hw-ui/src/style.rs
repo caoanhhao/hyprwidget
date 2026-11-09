@@ -10,8 +10,9 @@ use anyhow::{Context, Result};
 use gtk4::{gdk, prelude::*};
 use serde_json::Value;
 
-/// Built-in stylesheet; uses the variables of `_hypr.scss` so widgets match
-/// Hyprland before the user writes any CSS.
+/// Built-in stylesheet: resets every widget (`* { all: unset }`) so no GTK
+/// theme applies, then styles them from the variables of `_hypr.scss` so
+/// widgets match Hyprland before the user writes any CSS.
 pub const DEFAULT_SCSS: &str = include_str!("default.scss");
 
 /// Compiles `entry` (`.scss`/`.sass` through grass, `.css` as-is) with
@@ -64,8 +65,9 @@ impl Styles {
             p
         };
         Ok(Rc::new(Self {
-            // Above ~/.config/gtk-4.0/gtk.css (USER), which themes such as
-            // Orchis use to paint every `.background` window.
+            // Above every theme source, including ~/.config/gtk-4.0/gtk.css
+            // (USER): the default stylesheet resets all properties, so the
+            // desktop's GTK theme never reaches hyprwidget's widgets.
             base: make(gtk4::STYLE_PROVIDER_PRIORITY_USER + 1, "default"),
             user: make(gtk4::STYLE_PROVIDER_PRIORITY_USER + 2, "user"),
             inline: make(gtk4::STYLE_PROVIDER_PRIORITY_USER + 3, "inline"),

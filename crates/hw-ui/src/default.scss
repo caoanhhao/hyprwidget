@@ -1,20 +1,47 @@
-// Built-in hyprwidget stylesheet. Every value comes from Hyprland through
-// the generated `_hypr.scss` (PLAN.md §3.6); user styles load on top.
+// Built-in hyprwidget stylesheet. Values come from Hyprland through the
+// generated `_hypr.scss` (PLAN.md §3.6); the user's stylesheet loads on top.
 @import "hypr";
+
+// No GTK theme: the desktop theme (gsettings, ~/.config/gtk-4.0/gtk.css) is
+// for GTK apps. This provider sits above all theme sources, so resetting
+// every property here removes them all.
+* {
+  all: unset;
+}
+
+// Colors Hyprland has no option for. Override in your stylesheet, e.g.
+// `window { --hw-bg: rgba(0, 0, 0, 0.6); }`.
+window,
+tooltip {
+  --hw-fg: #e6e6e6;
+  --hw-fg-dim: rgba(230, 230, 230, 0.55);
+  --hw-bg: rgba(20, 20, 26, 0.78);
+  --hw-surface: rgba(255, 255, 255, 0.08);
+  --hw-surface-hover: rgba(255, 255, 255, 0.16);
+  // From Hyprland.
+  --hw-accent: #{$general-col-active_border-color};
+  --hw-border: #{$general-col-inactive_border-color};
+  color: var(--hw-fg);
+  font-family: $misc-font_family;
+}
 
 window.hw-window {
   background: transparent;
-  font-family: $misc-font_family;
 }
+
+$radius: $decoration-rounding;
+$radius-small: calc(#{$decoration-rounding} / 2);
+$duration: $animations-animation-fadeLayersIn-duration;
+$easing: $animations-animation-fadeLayersIn-easing;
 
 // Surfaces that look like a Hyprland window: same rounding, border,
 // opacity and shadow.
 .hw-panel {
-  border-radius: $decoration-rounding;
+  background-color: var(--hw-bg);
+  border-radius: $radius;
   border: $general-border_size solid $general-col-inactive_border-color;
   opacity: $decoration-inactive_opacity;
-  transition: opacity $animations-animation-fadeLayersIn-duration $animations-animation-fadeLayersIn-easing,
-    border-color $animations-animation-fadeLayersIn-duration $animations-animation-fadeLayersIn-easing;
+  transition: opacity $duration $easing, border-color $duration $easing;
   @if $decoration-shadow-enabled {
     box-shadow: 0 0 $decoration-shadow-range $decoration-shadow-color-color;
   }
@@ -26,5 +53,164 @@ window.hw-window {
 }
 
 .hw-card {
-  border-radius: $decoration-rounding;
+  border-radius: $radius;
+  background-color: var(--hw-surface);
+}
+
+tooltip {
+  background-color: var(--hw-bg);
+  border-radius: $radius-small;
+  border: $general-border_size solid $general-col-inactive_border-color;
+  padding: 4px 8px;
+}
+
+selection {
+  background-color: var(--hw-accent);
+}
+
+// Buttons
+button {
+  padding: 2px 8px;
+  border-radius: $radius-small;
+  background-color: var(--hw-surface);
+  transition: background-color $duration $easing;
+}
+
+button:hover {
+  background-color: var(--hw-surface-hover);
+}
+
+button:active,
+button:checked {
+  background-color: var(--hw-accent);
+}
+
+menubutton > button > box {
+  border-spacing: 4px;
+}
+
+menubutton arrow {
+  -gtk-icon-source: -gtk-icontheme("pan-down-symbolic");
+  min-width: 16px;
+  min-height: 16px;
+}
+
+popover > contents {
+  background-color: var(--hw-bg);
+  border-radius: $radius;
+  border: $general-border_size solid $general-col-inactive_border-color;
+  padding: 6px;
+}
+
+popover > arrow {
+  background-color: var(--hw-bg);
+}
+
+// Entry
+entry {
+  min-height: 24px;
+  padding: 2px 8px;
+  border-radius: $radius-small;
+  background-color: var(--hw-surface);
+  border: 1px solid transparent;
+}
+
+entry:focus-within {
+  border-color: var(--hw-accent);
+}
+
+entry placeholder {
+  color: var(--hw-fg-dim);
+}
+
+entry > text > cursor-handle,
+entry > text > block-cursor {
+  background-color: var(--hw-fg);
+}
+
+// Slider / progress / switch
+scale > trough,
+progressbar > trough {
+  min-width: 4px;
+  min-height: 4px;
+  border-radius: 999px;
+  background-color: var(--hw-surface);
+}
+
+scale.horizontal > trough,
+progressbar.horizontal > trough {
+  min-width: 40px;
+}
+
+scale.vertical > trough,
+progressbar.vertical > trough {
+  min-height: 40px;
+}
+
+scale > trough > highlight,
+progressbar > trough > progress {
+  border-radius: 999px;
+  background-color: var(--hw-accent);
+}
+
+scale > trough > slider {
+  min-width: 12px;
+  min-height: 12px;
+  margin: -4px;
+  border-radius: 999px;
+  background-color: var(--hw-fg);
+}
+
+switch {
+  min-width: 36px;
+  border-radius: 999px;
+  padding: 2px;
+  background-color: var(--hw-surface);
+  transition: background-color $duration $easing;
+}
+
+switch:checked {
+  background-color: var(--hw-accent);
+}
+
+switch > slider {
+  min-width: 16px;
+  min-height: 16px;
+  border-radius: 999px;
+  background-color: var(--hw-fg);
+}
+
+// Scrolling
+scrollbar > range > trough > slider {
+  min-width: 4px;
+  min-height: 4px;
+  border-radius: 999px;
+  background-color: var(--hw-surface-hover);
+}
+
+// Calendar
+calendar {
+  padding: 4px;
+}
+
+calendar > header {
+  padding-bottom: 4px;
+}
+
+calendar > grid > label {
+  padding: 4px;
+  border-radius: $radius-small;
+}
+
+calendar > grid > label.day-name,
+calendar > grid > label.other-month {
+  color: var(--hw-fg-dim);
+}
+
+calendar > grid > label.today {
+  box-shadow: inset 0 0 0 1px var(--hw-accent);
+}
+
+calendar > grid > label:selected {
+  background-color: var(--hw-accent);
 }
