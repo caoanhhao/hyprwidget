@@ -446,7 +446,12 @@ impl SurfaceView {
                 if sv.imp().pressed.borrow_mut().remove(&keycode) {
                     let time = c.current_event_time();
                     // Same keysym as the press (modifiers may have changed).
-                    let kv = sv.imp().keyvals.borrow_mut().remove(&keycode).unwrap_or_default();
+                    let kv = sv
+                        .imp()
+                        .keyvals
+                        .borrow_mut()
+                        .remove(&keycode)
+                        .unwrap_or_default();
                     sv.with_root(|s, root| s.key(root, keycode, kv, None, false, time));
                 }
             }

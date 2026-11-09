@@ -166,7 +166,11 @@ impl State {
             let Some(code) = self.key_lookup.by_sym.get(&sym).copied() else {
                 continue;
             };
-            let state = if w { KeyState::Pressed } else { KeyState::Released };
+            let state = if w {
+                KeyState::Pressed
+            } else {
+                KeyState::Released
+            };
             kb.input::<(), _>(
                 self,
                 Keycode::new(code),
