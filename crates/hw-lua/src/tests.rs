@@ -211,3 +211,18 @@ fn scss_partials_are_importable() {
         Some("$OPACITY: 0.5;")
     );
 }
+
+#[test]
+fn json_roundtrip() {
+    let dir = config_dir(
+        "json",
+        &[(
+            "hyprwidget.lua",
+            r#"local t = hw.json.decode('{"a":[1,2,{"b":"c"}],"n":null}')
+               assert(t.a[3].b == "c" and t.a[2] == 2)
+               assert(hw.json.decode(hw.json.encode({ x = 1.5 })).x == 1.5)
+               assert(not pcall(hw.json.decode, "{"))"#,
+        )],
+    );
+    load(dir, None);
+}
