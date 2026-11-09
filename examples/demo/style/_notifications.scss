@@ -1,0 +1,239 @@
+// Notification cards, popups, history and the DND toggle
+// (AGS scss/panel/right-panel/components/notification{,-popups}.scss,
+// widgets/notification-history.scss, bar/utilities.scss .dnd-toggle).
+@import "widget-defaults";
+
+@mixin m3b-button {
+  @include m3b-module;
+  color: $foreground;
+  border: none;
+  min-width: 25px;
+  background: $background-transparent;
+
+  &:hover {
+    background: $background;
+  }
+  &:checked,
+  &.checked {
+    @include m3b-button-checked;
+  }
+}
+
+.NotificationPopups,
+.notification-history-window {
+  font-family: "JetBrainsMono NFP", monospace;
+  background-color: transparent;
+}
+
+.notification-popups {
+  padding: 0px;
+  margin: 0px;
+  border-radius: 10px;
+}
+
+.notification {
+  @include m3b-module;
+  margin: 0px;
+  padding: 5px;
+  min-width: 0px;
+  min-height: 0px;
+
+  button {
+    @include m3b-button;
+  }
+
+  &:hover {
+    background-color: $background-semi-transparent;
+    .top-bar {
+      .copy,
+      .close,
+      .expand {
+        opacity: 1;
+      }
+    }
+  }
+
+  .top-bar {
+    padding: 5px;
+    border-radius: 5px;
+    background: $background-transparent;
+
+    .app-name {
+      font-size: 0.9em;
+      color: $foreground;
+    }
+
+    .copy,
+    .close,
+    .expand {
+      padding: 0px 5px;
+      opacity: 0;
+      background-color: transparent;
+
+      &:hover {
+        background-color: $background-semi-transparent;
+      }
+    }
+
+    .time {
+      font-size: 0.8em;
+      color: $foreground-secondary;
+    }
+  }
+
+  .content {
+    padding: 5px;
+    .image,
+    .icon {
+      -gtk-icon-size: 25px;
+      font-size: 30px;
+      min-width: 30px;
+      min-height: 30px;
+      color: $secondary;
+    }
+    .image {
+      -gtk-icon-size: 48px;
+      border-radius: 10px;
+    }
+
+    .title {
+      color: $secondary;
+    }
+
+    .body {
+      color: $foreground-secondary;
+      font-size: 0.9em;
+    }
+  }
+
+  &.critical .top-bar {
+    box-shadow: inset 3px 0 0 $red;
+  }
+
+  .actions {
+    button {
+      background-color: transparent;
+
+      &:hover {
+        background-color: $background-secondary;
+      }
+    }
+  }
+}
+
+.notification-history-window {
+  @include m3b-module;
+  padding: 10px;
+
+  button {
+    @include m3b-button;
+  }
+
+  .header {
+    padding: 0 5px;
+    .header-title {
+      font-weight: bold;
+      color: $secondary;
+    }
+    .danger:hover {
+      background: $red;
+    }
+  }
+}
+
+.notification-history {
+  border-radius: 10px;
+  background: $background-transparent;
+
+  .empty {
+    padding: 20px;
+    color: $foreground-tertiary;
+  }
+
+  .notification-stack {
+    @include m3b-module;
+    background: transparent;
+    padding: 5px;
+
+    .stack-scrolled {
+      transition: min-height 0.6s ease-in-out;
+      &.expanded {
+        min-height: 300px;
+      }
+      &.collapsed {
+        min-height: 100px;
+      }
+    }
+
+    &:hover {
+      .stack-header {
+        .actions button {
+          opacity: 1;
+        }
+      }
+    }
+
+    .stack-header {
+      padding: 5px;
+      .stack-title {
+        padding-left: 5px;
+        font-size: 0.9em;
+      }
+      .actions button {
+        opacity: 0;
+
+        &:not(:hover) {
+          background: transparent;
+        }
+      }
+    }
+  }
+}
+
+.dnd-toggle {
+  animation: m3b-ping-background 0.6s ease-out;
+
+  &.active {
+    opacity: 1;
+    animation: m3b-ping-pulse 0.6s ease-out;
+
+    label {
+      animation: m3b-ping-rotate 0.6s ease-out;
+    }
+  }
+}
+
+@keyframes m3b-ping-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 1;
+    color: $red;
+  }
+}
+
+@keyframes m3b-ping-background {
+  50% {
+    background-color: $background-transparent;
+  }
+}
+
+@keyframes m3b-ping-rotate {
+  0% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(25deg);
+  }
+  50% {
+    transform: rotate(0deg);
+  }
+  75% {
+    transform: rotate(-25deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}

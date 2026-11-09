@@ -6,6 +6,7 @@ require_all({
   "decoration",
   "bar",
   "services",
+  "notifications",
 })
 
 require_custom_dir()
