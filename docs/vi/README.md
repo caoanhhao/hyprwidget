@@ -1,8 +1,10 @@
 # Tài liệu hyprwidget
 
+[English](../README.md)
+
 hyprwidget là framework widget cho Wayland (layer-shell) viết bằng Rust: giao
 diện GTK4, logic/layout bằng **Lua 5.5**, config/settings bằng **JSON**, style
-bằng **SCSS**. Thiết kế và lộ trình: [`../PLAN.md`](../PLAN.md).
+bằng **SCSS**. Thiết kế và lộ trình: [`../../PLAN.md`](../../PLAN.md).
 
 ## API Lua
 
@@ -16,14 +18,14 @@ bằng **SCSS**. Thiết kế và lộ trình: [`../PLAN.md`](../PLAN.md).
 | [services.md](services.md) | `hw.service.*`: props và methods của từng service |
 | [plugins.md](plugins.md) | plugin (`plugin.json`, quyền, sandbox), theme, ví dụ plugin `sysmon` |
 | [cli.md](cli.md) | lệnh `hyprwidget …` và IPC socket |
-| [`../types/`](../types) | type stub LuaLS (`---@meta`) cho autocomplete — cách bật ở [getting-started.md](getting-started.md#autocomplete-luals) |
+| [`../../types/`](../../types) | type stub LuaLS (`---@meta`) cho autocomplete — cách bật ở [getting-started.md](getting-started.md#autocomplete-luals) |
 
 ## Ghi chú kỹ thuật
 
 | Trang | Nội dung |
 |---|---|
 | [memory.md](memory.md) | đo bộ nhớ (ngân sách < 80 MB, không tăng theo thời gian) |
-| [renderer.md](renderer.md) | renderer GSK (`vulkan` / `gl`) trên NVIDIA |
-| [services-dbus.md](services-dbus.md) | chi tiết các service D-Bus (notifd, mpris, tray, upower, power_profiles) |
-| [system-widgets.md](system-widgets.md) | UserPanel, wallpaper palette, AlwaysOn, KeyStroke của demo |
-| [embed.md](embed.md), [embed-spike.md](embed-spike.md) | `hw-embed`: compositor lồng cho `W.App` |
+| [renderer.md](../renderer.md) | (tiếng Anh) renderer GSK (`vulkan` / `gl`) trên NVIDIA |
+| [services-dbus.md](../services-dbus.md) | (tiếng Anh) chi tiết các service D-Bus (notifd, mpris, tray, upower, power_profiles) |
+| [system-widgets.md](../system-widgets.md) | (tiếng Anh) UserPanel, wallpaper palette, AlwaysOn, KeyStroke của demo |
+| [embed.md](../embed.md), [embed-spike.md](../embed-spike.md) | (tiếng Anh) `hw-embed`: compositor lồng cho `W.App` |

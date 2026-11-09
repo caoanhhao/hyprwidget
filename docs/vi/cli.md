@@ -25,7 +25,7 @@ hyprwidget [-c DIR] [-i INSTANCE] <command>
 
 Daemon log ra stderr (mức `info`, đổi bằng `RUST_LOG`, ví dụ
 `RUST_LOG=hw_lua=debug,info`). Các lệnh khác chỉ in cảnh báo. Renderer GSK mặc định
-`vulkan` nếu `GSK_RENDERER` chưa đặt ([renderer.md](renderer.md)).
+`vulkan` nếu `GSK_RENDERER` chưa đặt ([renderer.md](../renderer.md)).
 
 ## Request handler
 

@@ -105,7 +105,7 @@ Other commands talk to the daemon over
 
 | | |
 |---|---|
-| [docs/README.md](docs/README.md) | index (Vietnamese) |
+| [docs/README.md](docs/README.md) | index ([Vietnamese](docs/vi/README.md)) |
 | [docs/getting-started.md](docs/getting-started.md) | install, config layout, hot reload, LuaLS |
 | [docs/reactive.md](docs/reactive.md), [docs/widgets.md](docs/widgets.md) | Lua API |
 | [docs/options.md](docs/options.md), [docs/settings.md](docs/settings.md) | Hyprland options, settings |

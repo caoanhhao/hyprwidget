@@ -191,7 +191,7 @@ Method: `:enable([on = true])`.
 
 ## Service D-Bus
 
-Chi tiết đầy đủ: [services-dbus.md](services-dbus.md). Tóm tắt:
+Chi tiết đầy đủ: [services-dbus.md](../services-dbus.md). Tóm tắt:
 
 | Service | Field (Signal) | Method |
 |---|---|---|

@@ -160,7 +160,7 @@ GTK Inspector: `hyprwidget inspect`.
 
 ## Autocomplete (LuaLS)
 
-Thư mục [`types/`](../types) chứa stub `---@meta` cho
+Thư mục [`types/`](../../types) chứa stub `---@meta` cho
 [lua-language-server](https://luals.github.io/): `hw.*`, mọi `W.*` với props và
 event, các service và option (tên giống wiki Hyprland). Đặt `.luarc.json` trong
 thư mục config (xem `examples/demo/.luarc.json`):

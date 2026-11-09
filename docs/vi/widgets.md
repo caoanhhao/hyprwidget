@@ -171,7 +171,7 @@ W.Terminal {
 ### `W.App`
 
 Chạy một app Linux **bên trong** widget qua compositor Wayland lồng (`hw-embed`);
-chi tiết kỹ thuật, ma trận app và giới hạn: [embed.md](embed.md).
+chi tiết kỹ thuật, ma trận app và giới hạn: [embed.md](../embed.md).
 
 ```lua
 W.App {

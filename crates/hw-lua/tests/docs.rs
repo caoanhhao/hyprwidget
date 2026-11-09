@@ -1,6 +1,6 @@
-//! Keeps `docs/` and the LuaLS stubs in `types/` in sync with the code:
-//! every widget kind, event, inherited option, native service and service
-//! prop must be documented and typed.
+//! Keeps `docs/` (English), `docs/vi/` (Vietnamese) and the LuaLS stubs in
+//! `types/` in sync with the code: every widget kind, event, inherited
+//! option, native service and service prop must be documented and typed.
 
 use std::path::PathBuf;
 
@@ -26,21 +26,65 @@ fn section<'a>(text: &'a str, start: &str, next: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
+/// Documentation directories, one per language.
+const DOC_DIRS: [&str; 2] = ["docs", "docs/vi"];
+
 #[test]
 fn docs_cover_api() {
-    let widgets_md = read("docs/widgets.md");
-    let widgets_lua = read("types/widgets.lua");
-    let options_md = read("docs/options.md");
-    let options_lua = read("types/options.lua");
-    let services_md = read("docs/services.md");
-    let services_lua = read("types/services.lua");
     let mut missing = Vec::new();
+    for dir in DOC_DIRS {
+        check_docs(dir, &mut missing);
+    }
+    check_stubs(&mut missing);
+    assert!(
+        missing.is_empty(),
+        "docs/stubs out of date:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+fn check_docs(dir: &str, missing: &mut Vec<String>) {
+    let widgets_md = read(&format!("{dir}/widgets.md"));
+    let options_md = read(&format!("{dir}/options.md"));
+    let services_md = read(&format!("{dir}/services.md"));
 
     for k in Kind::ALL {
         let n = k.name();
         if !widgets_md.contains(&format!("| `{n}` |")) {
-            missing.push(format!("docs/widgets.md: widget table row for `{n}`"));
+            missing.push(format!("{dir}/widgets.md: widget table row for `{n}`"));
         }
+    }
+    for ev in EVENTS {
+        if !widgets_md.contains(&format!("| `{ev}`")) {
+            missing.push(format!("{dir}/widgets.md: event `{ev}`"));
+        }
+    }
+    for (name, ..) in INHERITED {
+        if !options_md.contains(&format!("| `{name}` |")) {
+            missing.push(format!("{dir}/options.md: option `{name}`"));
+        }
+    }
+    for svc in hw_services::NAMES {
+        let props = hw_services::props(svc).expect("props of every native service");
+        let Some(md) = section(&services_md, &format!("## {svc}\n"), "## ") else {
+            missing.push(format!("{dir}/services.md: section `## {svc}`"));
+            continue;
+        };
+        for p in props {
+            if !md.contains(&format!("`{p}`")) {
+                missing.push(format!("{dir}/services.md: {svc}.{p}"));
+            }
+        }
+    }
+}
+
+fn check_stubs(missing: &mut Vec<String>) {
+    let widgets_lua = read("types/widgets.lua");
+    let options_lua = read("types/options.lua");
+    let services_lua = read("types/services.lua");
+
+    for k in Kind::ALL {
+        let n = k.name();
         if !widgets_lua.contains(&format!("---@field {n} fun(props: hw.{n}Props")) {
             missing.push(format!("types/widgets.lua: hw.W field {n}"));
         }
@@ -49,47 +93,29 @@ fn docs_cover_api() {
         }
     }
     for ev in EVENTS {
-        if !widgets_md.contains(&format!("| `{ev}`")) {
-            missing.push(format!("docs/widgets.md: event `{ev}`"));
-        }
         if !widgets_lua.contains(&format!("\"{ev}\"")) {
             missing.push(format!("types/widgets.lua: hw.EventName {ev}"));
         }
     }
     for (name, ..) in INHERITED {
-        if !options_md.contains(&format!("| `{name}` |")) {
-            missing.push(format!("docs/options.md: option `{name}`"));
-        }
         if !options_lua.contains(&format!("---| \"{name}\"")) {
             missing.push(format!("types/options.lua: hw.OptionName {name}"));
         }
     }
     for svc in hw_services::NAMES {
         let props = hw_services::props(svc).expect("props of every native service");
-        let md = section(&services_md, &format!("## {svc}\n"), "## ");
-        let lua = section(
+        let Some(lua) = section(
             &services_lua,
             &format!("---@class hw.services.{svc}:"),
             "---@class",
-        );
-        if md.is_none() {
-            missing.push(format!("docs/services.md: section `## {svc}`"));
-        }
-        if lua.is_none() {
+        ) else {
             missing.push(format!("types/services.lua: class hw.services.{svc}"));
-        }
+            continue;
+        };
         for p in props {
-            if md.is_some_and(|s| !s.contains(&format!("`{p}`"))) {
-                missing.push(format!("docs/services.md: {svc}.{p}"));
-            }
-            if lua.is_some_and(|s| !s.contains(&format!("---@field {p} hw.Signal"))) {
+            if !lua.contains(&format!("---@field {p} hw.Signal")) {
                 missing.push(format!("types/services.lua: {svc}.{p}"));
             }
         }
     }
-    assert!(
-        missing.is_empty(),
-        "docs/stubs out of date:\n  {}",
-        missing.join("\n  ")
-    );
 }
