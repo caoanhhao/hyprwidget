@@ -10,10 +10,11 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
 use gtk4::subclass::prelude::*;
-use gtk4::{gdk, glib, graphene, gsk, prelude::*};
+use gtk4::{gdk, glib, glib::translate::IntoGlib, graphene, gsk, prelude::*};
 use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
+use crate::input::Mods;
 use crate::server::EmbedServer;
 
 /// Rectangle in surface-tree coordinates (logical pixels of the client).
@@ -62,6 +63,17 @@ pub(crate) struct ImBatch {
     pub commit: Option<String>,
     /// Current preedit text and cursor (byte offsets).
     pub preedit: (String, i32, i32),
+}
+
+thread_local! {
+    /// Until when (monotonic µs) button presses are swallowed.
+    static SWALLOW_UNTIL: Cell<i64> = const { Cell::new(0) };
+}
+
+/// A grabbing popup was dismissed by a click outside it: that click must
+/// not also reach the app (Hyprland delivers it to the layer surface).
+pub(crate) fn swallow_next_click() {
+    SWALLOW_UNTIL.with(|t| t.set(glib::monotonic_time() + 150_000));
 }
 
 /// evdev button code for a GDK button number.
@@ -410,11 +422,19 @@ impl SurfaceView {
             self,
             #[upgrade_or]
             glib::Propagation::Proceed,
-            move |c, _keyval, keycode, _mods| {
+            move |c, keyval, keycode, state| {
                 // GDK repeats held keys itself; the client repeats on its own.
                 if sv.imp().pressed.borrow_mut().insert(keycode) {
                     let time = c.current_event_time();
-                    sv.with_root(|s, root| s.key(root, keycode, true, time));
+                    let kv = (keyval.into_glib(), keyval.to_lower().into_glib());
+                    sv.imp().keyvals.borrow_mut().insert(keycode, kv);
+                    let mods = Mods {
+                        ctrl: state.contains(gdk::ModifierType::CONTROL_MASK),
+                        shift: state.contains(gdk::ModifierType::SHIFT_MASK),
+                        alt: state.contains(gdk::ModifierType::ALT_MASK),
+                        logo: state.contains(gdk::ModifierType::SUPER_MASK),
+                    };
+                    sv.with_root(|s, root| s.key(root, keycode, kv, Some(mods), true, time));
                 }
                 glib::Propagation::Stop
             }
@@ -425,7 +445,9 @@ impl SurfaceView {
             move |c, _keyval, keycode, _mods| {
                 if sv.imp().pressed.borrow_mut().remove(&keycode) {
                     let time = c.current_event_time();
-                    sv.with_root(|s, root| s.key(root, keycode, false, time));
+                    // Same keysym as the press (modifiers may have changed).
+                    let kv = sv.imp().keyvals.borrow_mut().remove(&keycode).unwrap_or_default();
+                    sv.with_root(|s, root| s.key(root, keycode, kv, None, false, time));
                 }
             }
         ));
@@ -454,12 +476,14 @@ impl SurfaceView {
     fn release_keyboard(&self) {
         let imp = self.imp();
         let keys: Vec<u32> = imp.pressed.borrow_mut().drain().collect();
+        let keyvals = std::mem::take(&mut *imp.keyvals.borrow_mut());
         if imp.ti_enabled.get() {
             imp.im.focus_out();
         }
         self.with_root(|s, root| {
             for k in keys {
-                s.key(root.clone(), k, false, 0);
+                let kv = keyvals.get(&k).copied().unwrap_or_default();
+                s.key(root.clone(), k, kv, None, false, 0);
             }
             s.keyboard_leave(root);
         });
@@ -474,6 +498,14 @@ impl SurfaceView {
                     return glib::Propagation::Proceed;
                 };
                 let pressed = ev.event_type() == T::ButtonPress;
+                let imp = self.imp();
+                if pressed && SWALLOW_UNTIL.with(|t| t.replace(0)) > glib::monotonic_time() {
+                    imp.swallow_release.set(true);
+                    return glib::Propagation::Stop;
+                }
+                if !pressed && imp.swallow_release.replace(false) {
+                    return glib::Propagation::Stop;
+                }
                 if pressed && self.is_focusable() {
                     self.grab_focus();
                 }
@@ -577,7 +609,10 @@ mod imp {
         pub(super) batch: RefCell<ImBatch>,
         pub(super) flush_queued: Cell<bool>,
         pub(super) pressed: RefCell<HashSet<u32>>,
+        /// Keysym (and lowercase) of each held key, for the release.
+        pub(super) keyvals: RefCell<HashMap<u32, (u32, u32)>>,
         pub(super) touch_slots: RefCell<HashMap<usize, i32>>,
+        pub(super) swallow_release: Cell<bool>,
     }
 
     impl Default for SurfaceView {
@@ -597,7 +632,9 @@ mod imp {
                 batch: RefCell::default(),
                 flush_queued: Cell::default(),
                 pressed: RefCell::default(),
+                keyvals: RefCell::default(),
                 touch_slots: RefCell::default(),
+                swallow_release: Cell::default(),
             }
         }
     }

@@ -79,7 +79,7 @@ use smithay::{
 
 use crate::buffer;
 use crate::clipboard::Clipboards;
-use crate::input::KeyboardConfig;
+use crate::input::{KeyLookup, KeyboardConfig};
 use crate::popup::Popup;
 use crate::surface::{Placed, Rect, SurfaceView};
 use crate::text_input::TextInputState;
@@ -524,6 +524,7 @@ pub(crate) struct State {
     pub(crate) pointer: PointerHandle<State>,
     pub(crate) keyboard: KeyboardHandle<State>,
     pub(crate) touch: TouchHandle<State>,
+    pub(crate) key_lookup: KeyLookup,
     output: Output,
     dmabuf: DmabufState,
     _dmabuf_global: Option<DmabufGlobal>,
@@ -584,6 +585,7 @@ impl State {
             .map_err(|e| anyhow::anyhow!("keyboard: {e:?}"))?;
         let pointer = seat.add_pointer();
         let touch = seat.add_touch();
+        let key_lookup = KeyLookup::new(&kb);
 
         let output = Output::new(
             "HW-EMBED-1".into(),
@@ -657,6 +659,7 @@ impl State {
             pointer,
             keyboard,
             touch,
+            key_lookup,
             output,
             dmabuf,
             _dmabuf_global: dmabuf_global,

@@ -4,10 +4,11 @@
 //! [`SurfaceView::widget_to_tree`](crate::surface::SurfaceView)); the
 //! target surface is found by hit-testing the tree.
 
+use std::collections::HashMap;
 use std::process::Command;
 
 use smithay::backend::input::{Axis, AxisSource, ButtonState, KeyState};
-use smithay::input::keyboard::{FilterResult, Keycode};
+use smithay::input::keyboard::{FilterResult, Keycode, xkb};
 use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
 use smithay::input::touch::{DownEvent, MotionEvent as TouchMotion, UpEvent};
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -77,6 +78,104 @@ impl KeyboardConfig {
             c.repeat_delay = d;
         }
         c
+    }
+}
+
+/// Keysym ↔ keycode tables of the server keymap. GDK reports keycodes of
+/// the device's own keymap; a device with a different one (a virtual
+/// keyboard such as `wtype`, a per-device layout) is remapped by keysym.
+#[derive(Default)]
+pub(crate) struct KeyLookup {
+    by_sym: HashMap<u32, u32>,
+    syms: HashMap<u32, Vec<u32>>,
+}
+
+/// Modifiers GDK says are held (ctrl, shift, alt, logo).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Mods {
+    pub ctrl: bool,
+    pub shift: bool,
+    pub alt: bool,
+    pub logo: bool,
+}
+
+impl KeyLookup {
+    pub(crate) fn new(c: &KeyboardConfig) -> Self {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let Some(keymap) = xkb::Keymap::new_from_names(
+            &ctx,
+            &c.rules,
+            &c.model,
+            &c.layout,
+            &c.variant,
+            c.options.clone(),
+            xkb::KEYMAP_COMPILE_NO_FLAGS,
+        ) else {
+            return Self::default();
+        };
+        let mut this = Self::default();
+        let (min, max) = (keymap.min_keycode().raw(), keymap.max_keycode().raw());
+        for kc in min..=max {
+            let code = xkb::Keycode::new(kc);
+            for level in 0..keymap.num_levels_for_key(code, 0) {
+                for sym in keymap.key_get_syms_by_level(code, 0, level) {
+                    this.by_sym.entry(sym.raw()).or_insert(kc);
+                    this.syms.entry(kc).or_default().push(sym.raw());
+                }
+            }
+        }
+        this
+    }
+
+    /// `keycode` if the server keymap gives it `keyval` (or its lowercase),
+    /// else the server keycode for that keysym.
+    pub(crate) fn remap(&self, keycode: u32, keyval: u32, lower: u32) -> u32 {
+        if keyval == 0
+            || self
+                .syms
+                .get(&keycode)
+                .is_some_and(|s| s.contains(&keyval) || s.contains(&lower))
+        {
+            return keycode;
+        }
+        self.by_sym
+            .get(&keyval)
+            .or_else(|| self.by_sym.get(&lower))
+            .copied()
+            .unwrap_or(keycode)
+    }
+}
+
+impl State {
+    /// Presses/releases modifier keys so the client sees `want`. Needed when
+    /// the modifier was pressed outside the widget or only sent as state
+    /// (virtual keyboards).
+    fn sync_mods(&mut self, want: Mods, time: u32) {
+        use smithay::input::keyboard::keysyms as k;
+        let kb = self.keyboard.clone();
+        let have = kb.modifier_state();
+        for (w, h, sym) in [
+            (want.ctrl, have.ctrl, k::KEY_Control_L),
+            (want.shift, have.shift, k::KEY_Shift_L),
+            (want.alt, have.alt, k::KEY_Alt_L),
+            (want.logo, have.logo, k::KEY_Super_L),
+        ] {
+            if w == h {
+                continue;
+            }
+            let Some(code) = self.key_lookup.by_sym.get(&sym).copied() else {
+                continue;
+            };
+            let state = if w { KeyState::Pressed } else { KeyState::Released };
+            kb.input::<(), _>(
+                self,
+                Keycode::new(code),
+                state,
+                SERIAL_COUNTER.next_serial(),
+                time,
+                |_, _, _| FilterResult::Forward,
+            );
+        }
     }
 }
 
@@ -179,14 +278,27 @@ impl EmbedServer {
         });
     }
 
-    /// `keycode` is the XKB keycode GDK reports (evdev + 8).
-    pub(crate) fn key(&self, root: WlSurface, keycode: u32, pressed: bool, time: u32) {
+    /// `keycode` is the XKB keycode GDK reports (evdev + 8); `keyval` and
+    /// its lowercase form fix it up for devices with another keymap.
+    pub(crate) fn key(
+        &self,
+        root: WlSurface,
+        keycode: u32,
+        keyval: (u32, u32),
+        mods: Option<Mods>,
+        pressed: bool,
+        time: u32,
+    ) {
         self.run(move |st| {
+            let keycode = st.key_lookup.remap(keycode, keyval.0, keyval.1);
             let kb = st.keyboard.clone();
-            let serial = SERIAL_COUNTER.next_serial();
             if pressed && kb.current_focus().as_ref() != Some(&root) {
-                kb.set_focus(st, Some(root), serial);
+                kb.set_focus(st, Some(root), SERIAL_COUNTER.next_serial());
             }
+            if let Some(m) = mods {
+                st.sync_mods(m, time);
+            }
+            let serial = SERIAL_COUNTER.next_serial();
             kb.input::<(), _>(
                 st,
                 Keycode::new(keycode),
@@ -215,6 +327,7 @@ impl EmbedServer {
         self.run(move |st| {
             let kb = st.keyboard.clone();
             if kb.current_focus().as_ref() == Some(&root) {
+                st.sync_mods(Mods::default(), 0);
                 kb.set_focus(st, None, SERIAL_COUNTER.next_serial());
             }
         });

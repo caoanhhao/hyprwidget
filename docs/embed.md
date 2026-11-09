@@ -71,9 +71,28 @@ Embedded apps get `GTK_IM_MODULE=wayland` and `QT_IM_MODULE=wayland` so they
 use text-input-v3 (the user's session sets `fcitx`, which would bypass the
 bridge and put the candidate window in the wrong place). Override via `env`.
 
-Not verified interactively (the desktop was in use; synthetic keys briefly
-landed in another window, so testing stopped): typing in Qt apps, popups
-opened by clicks, clipboard both ways, touch.
+Also verified in a Qt6 app (fcitx5-config-qt search field): `tieesng
+vieejt` → **"tiếng việt"**.
+
+## Interactive checks (second pass, desktop idle)
+
+- **Popups:** pavucontrol's "Show:" combo opens as a `GtkPopover` that
+  extends below the widget (not clipped); choosing an item applies it and
+  closes the menu; a click outside dismisses it (`popup_done`). That
+  dismissing click is now swallowed — before the fix it also reached the app
+  (it moved a volume slider underneath).
+- **Clipboard:** `wl-copy` text pasted with Ctrl+V into embedded zenity;
+  text copied there (Ctrl+A, Ctrl+C) came out of `wl-paste`; the selection
+  also reached the primary selection (`wl-paste -p`).
+- **Keys from virtual keyboards:** `wtype` uploads its own keymap, so the raw
+  keycode GDK reports meant something else to the client (Ctrl+V arrived as
+  Escape and closed zenity). Keycodes are now checked against the server
+  keymap by keysym and remapped when they disagree; modifiers that GDK reports
+  only as state (`wtype -M ctrl`, or held before the widget got focus) are
+  pressed/released for the client before the key.
+
+Not verified: touch (no touchscreen), cursor-shape images, fractional scale
+(the monitor is at scale 1).
 
 ## How it works (additions over the spike)
 
