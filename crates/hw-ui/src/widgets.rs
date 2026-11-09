@@ -105,6 +105,7 @@ pub enum Kind {
     Popover,
     DrawingArea,
     Calendar,
+    Picture,
 }
 
 impl Kind {
@@ -130,6 +131,7 @@ impl Kind {
         Kind::Popover,
         Kind::DrawingArea,
         Kind::Calendar,
+        Kind::Picture,
     ];
 
     pub fn name(self) -> &'static str {
@@ -155,6 +157,7 @@ impl Kind {
             Kind::Popover => "Popover",
             Kind::DrawingArea => "DrawingArea",
             Kind::Calendar => "Calendar",
+            Kind::Picture => "Picture",
         }
     }
 
@@ -217,6 +220,7 @@ pub fn create(kind: Kind) -> gtk4::Widget {
         Kind::Popover => gtk4::Popover::new().upcast(),
         Kind::DrawingArea => gtk4::DrawingArea::new().upcast(),
         Kind::Calendar => gtk4::Calendar::new().upcast(),
+        Kind::Picture => gtk4::Picture::new().upcast(),
     };
     if kind == Kind::Box {
         // Orientation defaults; `vertical = true` flips it.
@@ -485,6 +489,12 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
             .downcast_ref::<gtk4::Image>()
             .unwrap()
             .set_from_file(v.as_str()),
+        // Scaled image; `content_fit` ("cover", "contain"…) and `can_shrink`
+        // go through the GObject fallback.
+        (Kind::Picture, "file") => w
+            .downcast_ref::<gtk4::Picture>()
+            .unwrap()
+            .set_filename(v.as_str().filter(|s| !s.is_empty())),
         (Kind::Image | Kind::Icon, "pixel_size" | "size") => w
             .downcast_ref::<gtk4::Image>()
             .unwrap()
