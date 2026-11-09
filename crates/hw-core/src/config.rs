@@ -119,6 +119,7 @@ pub const APP_KEYS: &[&str] = &[
     "theme",
     "plugins",
     "monitors",
+    "hypr_custom_dir",
 ];
 
 /// App-level settings from `config.json`.
@@ -132,6 +133,9 @@ pub struct AppConfig {
     pub layer_rules: bool,
     /// Option overrides from JSON (nested; flat keys expanded).
     pub options: serde_json::Value,
+    /// Where `hw.set_option` writes Hyprland options (`<option>.lua` with
+    /// `hl.config{}`, same as AGS). Default `~/.config/hypr/config/custom`.
+    pub hypr_custom_dir: PathBuf,
 }
 
 impl AppConfig {
@@ -162,6 +166,7 @@ impl AppConfig {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true),
             options: crate::options::expand_keys(&serde_json::Value::Object(options)),
+            hypr_custom_dir: str_key("hypr_custom_dir", "~/.config/hypr/config/custom")?,
         })
     }
 }
