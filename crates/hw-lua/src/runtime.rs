@@ -1103,6 +1103,8 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     g.set("require_all", require_all)?;
     g.set("require_custom_dir", require_custom_dir)?;
 
+    crate::dbus_services::install(lua, &hw)?;
+
     let loaded: Table = package.get("loaded")?;
     loaded.set("hw", hw.clone())?;
     g.set("hw", hw.clone())?;

@@ -9,7 +9,9 @@ repository.workspace = true
 [dependencies]
 hw-core.workspace = true
 hw-ui.workspace = true
+hw-services.workspace = true
 mlua.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tracing.workspace = true
