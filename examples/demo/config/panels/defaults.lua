@@ -9,8 +9,6 @@ end
 
 -- constants/api.constants.ts
 M.BOORU_APIS = {
-  { name = "Danbooru", value = "danbooru", url = "https://danbooru.donmai.us/", idSearchUrl = "https://danbooru.donmai.us/posts/" },
-  { name = "Safebooru", value = "safebooru", url = "https://safebooru.donmai.us/", idSearchUrl = "https://safebooru.donmai.us/posts/" },
   { name = "Wallhaven", value = "wallhaven", url = "https://wallhaven.cc/", idSearchUrl = "https://wallhaven.cc/w/" },
 }
 
@@ -73,9 +71,7 @@ function M.defaults()
     ["booru.bookmarks"] = {},
     ["booru.selectedTab"] = M.BOORU_APIS[1].name,
 
-    ["apiKeys.danbooru"] = api_keys("Danbooru"),
     ["apiKeys.gelbooru"] = api_keys("Gelbooru"),
-    ["apiKeys.safebooru"] = api_keys("Safebooru"),
     ["apiKeys.wallhaven"] = api_keys("Wallhaven"),
 
     ["notifications.sound"] = setting(

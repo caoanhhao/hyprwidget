@@ -1,7 +1,7 @@
 -- Port of class/BooruImage.class.tsx, widgets/leftPanel/components/
 -- BooruViewer.tsx and widgets/rightPanel/components/Waifu.tsx.
 --
---   W.BooruViewer{}   -- left panel: browse Danbooru/Safebooru/Wallhaven
+--   W.BooruViewer{}   -- left panel: browse Wallhaven
 --   W.Waifu{}         -- right panel: settings waifuWidget.current
 --
 -- Images are plain tables as stored in settings (id, width, height, api,
@@ -313,6 +313,18 @@ local function run_script(args, cb)
       cb(parsed)
     end
   end)
+end
+
+-- The stored API, or the first supported one if it was removed (old
+-- settings may still name Danbooru/Safebooru).
+local function current_api()
+  local stored = hw.settings:get("booru.api")
+  for _, api in ipairs(defaults.BOORU_APIS) do
+    if stored and stored.value == api.value then
+      return api
+    end
+  end
+  return defaults.BOORU_APIS[1]
 end
 
 local function api_args(api, args)
@@ -627,7 +639,8 @@ hw.define("BooruViewer", function(props)
   local cache_size = hw.state("0mb")
   local status = hw.state("idle")
   local fetched_tags = hw.state({})
-  local selected = hw.state(hw.settings:get("booru.selectedTab") or (hw.settings:get("booru.api") or {}).name)
+  local stored_tab = hw.settings:get("booru.selectedTab")
+  local selected = hw.state(stored_tab == "Bookmarks" and stored_tab or current_api().name)
   local bottom_revealed = hw.state(false)
   local page = hw.state(1)
   local direction = hw.state("slide_left")
@@ -639,7 +652,7 @@ hw.define("BooruViewer", function(props)
   end
 
   local function calc_cache_size()
-    local api = (hw.settings:get("booru.api") or {}).value or "danbooru"
+    local api = current_api().value
     hw.exec_async({ "du", "-sb", BOORU_DIR .. "/" .. api .. "/previews" }, function(out)
       local bytes = tonumber((out or ""):match("^(%d+)")) or 0
       cache_size:set(string.format("%dmb", math.floor(bytes / (1024 * 1024) + 0.5)))
@@ -687,7 +700,7 @@ hw.define("BooruViewer", function(props)
       end
       done(list)
     else
-      local api = hw.settings:get("booru.api") or defaults.BOORU_APIS[1]
+      local api = current_api()
       local args = api_args(api.value, {
         "--api", api.value,
         "--tags", table.concat(hw.settings:get("booru.tags") or {}, ","),
@@ -706,7 +719,7 @@ hw.define("BooruViewer", function(props)
   end
 
   local function fetch_tags(tag)
-    local api = (hw.settings:get("booru.api") or defaults.BOORU_APIS[1]).value
+    local api = current_api().value
     run_script(api_args(api, { "--api", api, "--tag", tag }), function(list, err)
       if not list then
         common.notify("Error fetching tags", err)
@@ -1008,7 +1021,7 @@ hw.define("BooruViewer", function(props)
                   label = cache_size,
                   tooltip = "Clear Cache",
                   on_click = function()
-                    local base = BOORU_DIR .. "/" .. ((hw.settings:get("booru.api") or {}).value or "danbooru")
+                    local base = BOORU_DIR .. "/" .. current_api().value
                     hw.exec_async({
                       "bash", "-c",
                       string.format("rm -rf %s %s && mkdir -p %s %s", q(base .. "/previews"), q(base .. "/images"), q(base .. "/previews"), q(base .. "/images")),

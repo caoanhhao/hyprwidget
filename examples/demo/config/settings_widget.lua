@@ -60,10 +60,6 @@ M.defaults = {
   ["hyprsunset.kelvin"] = 6500,
   ["fileManager"] = "nautilus",
   ["wallpaperSwitcher.category"] = "defaults/sfw",
-  ["apiKeys.danbooru.user"] = setting("Danbooru API User", "publicapi", "string", 1, 256),
-  ["apiKeys.danbooru.key"] = setting("Danbooru API Key", "", "string", 1, 256),
-  ["apiKeys.safebooru.user"] = setting("Safebooru API User", "publicapi", "string", 1, 256),
-  ["apiKeys.safebooru.key"] = setting("Safebooru API Key", "", "string", 1, 256),
   ["apiKeys.wallhaven.key"] = setting("Wallhaven API Key", "", "string", 1, 256),
 }
 for _, h in ipairs(M.hyprland) do
@@ -486,8 +482,6 @@ hw.define("SettingsWidget", function(props)
           M.Setting("ui.fontSize"),
         }),
         category("Api Keys", {
-          sub({ M.Setting("apiKeys.danbooru.user"), M.Setting("apiKeys.danbooru.key") }),
-          sub({ M.Setting("apiKeys.safebooru.user"), M.Setting("apiKeys.safebooru.key") }),
           sub({ M.Setting("apiKeys.wallhaven.key") }),
         }),
         category("Notifications", {
