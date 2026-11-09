@@ -64,6 +64,8 @@ pub struct Core {
     pub extra_rules: RefCell<Vec<String>>,
     /// `hw.service.*`, started on first use.
     pub services: crate::service::Services,
+    /// Generated SCSS partials from `hw.scss(name, text)`.
+    pub scss_partials: RefCell<std::collections::BTreeMap<String, String>>,
 }
 
 impl Core {
@@ -88,6 +90,7 @@ impl Core {
             all_ns: RefCell::default(),
             extra_rules: RefCell::default(),
             services: Default::default(),
+            scss_partials: Default::default(),
         }))
     }
 
@@ -967,6 +970,66 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
                 st.core.extra_rules.borrow_mut().push(code);
             }
             Ok(())
+        })?,
+    )?;
+
+    // Styles
+    hw.set(
+        "scss",
+        lua.create_function(|lua, (name, text): (String, String)| {
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                || name == "hypr"
+            {
+                return Err(mlua::Error::runtime(format!(
+                    "hw.scss: invalid partial name '{name}'"
+                )));
+            }
+            let st = RtState::get(lua)?;
+            st.core
+                .scss_partials
+                .borrow_mut()
+                .insert(name.clone(), text.clone());
+            if let Some(ui) = &st.core.ui {
+                let changed = ui
+                    .styles
+                    .write_partial(&name, &text)
+                    .map_err(|e| mlua::Error::runtime(format!("{e:#}")))?;
+                // While loading, the stylesheet is compiled right after.
+                if changed
+                    && !st.loading.get()
+                    && let Err(e) = ui.styles.reload_user()
+                {
+                    tracing::error!("stylesheet: {e:#}");
+                }
+            }
+            Ok(())
+        })?,
+    )?;
+    hw.set(
+        "watch_file",
+        lua.create_function(|lua, (path, f): (String, Function)| {
+            let st = RtState::get(lua)?;
+            let file = gio::File::for_path(&path);
+            let mon = file
+                .monitor_file(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE)
+                .map_err(|e| mlua::Error::runtime(format!("hw.watch_file {path}: {e}")))?;
+            let weak = lua.weak();
+            mon.connect_changed(move |_, _, _, ev| {
+                use gio::FileMonitorEvent as E;
+                if !matches!(
+                    ev,
+                    E::ChangesDoneHint | E::Created | E::Deleted | E::MovedIn | E::Renamed
+                ) {
+                    return;
+                }
+                if let Some(lua) = weak.try_upgrade() {
+                    RtState::spawn(&lua, &f, ());
+                }
+            });
+            Ok(TimerHandle(st.keep(Box::new(mon))))
         })?,
     )?;
 
