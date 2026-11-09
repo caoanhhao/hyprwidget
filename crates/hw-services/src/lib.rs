@@ -17,6 +17,7 @@ pub mod audio;
 pub mod battery;
 pub mod brightness;
 pub mod hyprland;
+pub mod hyprsunset;
 pub mod sysinfo;
 
 // D-Bus services (own Lua bridge in `hw-lua::dbus_services`).
@@ -37,6 +38,7 @@ pub fn start(name: &str) -> Option<anyhow::Result<Rc<Service>>> {
         "audio" => audio::start(),
         "battery" => battery::start(),
         "brightness" => brightness::start(),
+        "hyprsunset" => hyprsunset::start(),
         _ => return None,
     })
 }
@@ -49,4 +51,5 @@ pub const NAMES: &[&str] = &[
     "audio",
     "battery",
     "brightness",
+    "hyprsunset",
 ];
