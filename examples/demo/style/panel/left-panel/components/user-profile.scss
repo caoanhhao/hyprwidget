@@ -1,0 +1,15 @@
+.user-profile {
+  padding: 0.5em;
+
+  .main {
+    @include module;
+    padding: 1em;
+
+    .profile-picture {
+      .image {
+        border-radius: 50%;
+      }
+      background: transparent;
+    }
+  }
+}

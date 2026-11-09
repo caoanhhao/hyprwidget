@@ -109,10 +109,9 @@ hw.per_monitor(function(monitor)
     monitor = monitor,
     anchor = { "bottom", "left", "right" },
     margin = hw.opt.general.gaps_out,
-    -- Hidden while a window is fullscreen on this monitor.
-    visible = hypr.fullscreen:map(function(f)
-      return (f or {})[monitor.name] ~= 2
-    end),
+    -- Hidden by default now that the real bar exists:
+    --   hyprwidget toggle services-DP-2
+    visible = false,
 
     W.CenterBox({
       class = "bar hw-panel",

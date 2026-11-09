@@ -1,0 +1,18 @@
+.custom-scripts {
+  margin: 5px;
+
+  .script {
+    box-shadow: $BOX-SHADOW;
+
+    .icon {
+      font-size: 1.5em;
+    }
+
+  }
+
+  .status-badge {
+    @include button;
+    font-size: 1.1em;
+    box-shadow: $BOX-SHADOW;
+  }
+}
