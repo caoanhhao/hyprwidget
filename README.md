@@ -35,8 +35,12 @@ Rust ≥ 1.88 and, on Arch:
 
 ```sh
 pacman -S gtk4 gtk4-layer-shell lua vte4 libxkbcommon
-cargo build --release
+cargo install --path . --locked   # installs `hyprwidget` into ~/.cargo/bin
 ```
+
+`cargo build --release` only builds `target/release/hyprwidget`; use `cargo install`
+(with `~/.cargo/bin` in `PATH`) to get the `hyprwidget` command, and re-run it after
+updating.
 
 | Library | Used for |
 |---|---|

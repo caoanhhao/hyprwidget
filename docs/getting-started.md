@@ -11,8 +11,12 @@ còn lại vẫn chạy.
 
 ```sh
 pacman -S gtk4 gtk4-layer-shell lua vte4 libxkbcommon pipewire wireplumber
-cargo build --release
+cargo install --path . --locked     # cài binary vào ~/.cargo/bin
 ```
+
+`cargo build --release` chỉ build ra `target/release/hyprwidget`, không đưa vào
+`PATH`. Dùng `cargo install` (cần `~/.cargo/bin` trong `PATH`) để gọi được lệnh
+`hyprwidget`, và chạy lại lệnh này sau mỗi lần cập nhật code.
 
 ## Chạy
 
