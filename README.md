@@ -53,6 +53,13 @@ Hyprland values. The merged options are available as `hw.option("decoration:roun
 `hypr` partial (`@import "hypr";` → `$decoration-rounding`, `$general-gaps_out`, …,
 plus `--decoration-rounding` CSS custom properties).
 
+The desktop GTK theme is not used: GTK themes are for GTK apps. hyprwidget
+loads GTK's built-in theme, resets every widget (`* { all: unset; }` above all
+theme sources, including `~/.config/gtk-4.0/gtk.css`) and styles them from
+Hyprland's options. Colors Hyprland has no option for are CSS variables
+(`--hw-fg`, `--hw-bg`, `--hw-surface`; `--hw-accent` = `general:col.active_border`)
+that your stylesheet can override.
+
 ## Layout
 
 | Path | Role |

@@ -225,6 +225,11 @@ pub fn create(kind: Kind) -> gtk4::Widget {
             .set_orientation(Horizontal);
     }
     let _ = Vertical;
+    // Without a theme nothing sizes these; keep them at natural height
+    // instead of stretching to the row (override with `valign`).
+    if matches!(kind, Kind::Switch | Kind::Progress) {
+        w.set_valign(gtk4::Align::Center);
+    }
     w.add_css_class(&kind_class(kind));
     w
 }
