@@ -160,7 +160,7 @@ Mọi giá trị là Signal reactive: đổi `rounding` trong Hyprland thì widg
 | `decoration:active_opacity` / `inactive_opacity` | opacity khi window có/không có focus |
 | `decoration:dim_inactive`, `dim_strength` | làm tối panel không focus (tuỳ chọn) |
 | `decoration:shadow:enabled/range/render_power/color/offset` | `box-shadow` |
-| `decoration:blur:enabled` (+ `size`, `passes`, `ignore_opacity`, `popups`) | hyprwidget tự đăng ký layer rule `blur`/`blur_popups` cho namespace của nó (thay cho danh sách viết tay trong `layerrule.lua` hiện tại); `blur:popups_ignorealpha` dùng làm `ignore_alpha` |
+| `decoration:blur:enabled` (+ `size`, `passes`, `ignore_opacity`, `popups`) | hyprwidget tự đăng ký layer rule `blur`/`blur_popups` cho namespace của nó (thay cho danh sách viết tay trong `layerrule.lua` hiện tại); `ignore_alpha` của layer lấy từ option riêng `blur:ignore_alpha` (mặc định 0.1 như `layerrule.lua`; `false` = không đặt), vì `blur:popups_ignorealpha` của Hyprland chỉ dành cho popup và thường ~0.97 → panel trong suốt không được blur |
 | `animations:enabled`, `bezier`, `animation = layersIn/layersOut/fadeLayers…` | thời gian và easing của Revealer/transition CSS (speed của Hyprland tính bằng 100ms, bezier đổi thành `cubic-bezier()`) |
 | `misc:font_family` (nếu có) | font mặc định |
 

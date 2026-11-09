@@ -34,6 +34,13 @@ use crate::signal::{JsonSetter, LuaSignal, MonitorsSource, as_signal, call_value
 
 const PRELUDE: &str = include_str!("prelude.lua");
 
+/// Widget option for the `ignore_alpha` layer rule of our namespaces
+/// (`hw.config({ blur = { ignore_alpha = 0.3 } })`, `false` = no rule).
+const IGNORE_ALPHA_OPTION: &str = "blur:ignore_alpha";
+/// Same value `~/.config/hypr/config/layerrule.lua` used for the AGS panels:
+/// low enough that translucent backgrounds still get blurred.
+const DEFAULT_IGNORE_ALPHA: f64 = 0.1;
+
 /// GTK side; absent in headless mode (`check`, offline `option`).
 pub struct Ui {
     pub app: gtk4::Application,
@@ -113,10 +120,13 @@ impl Core {
             return;
         }
         let popups = self.options.get("decoration:blur:popups") == json!(true);
-        let alpha = self
-            .options
-            .get("decoration:blur:popups_ignorealpha")
-            .as_f64();
+        // `ignore_alpha` on the layer itself (Hyprland's
+        // `popups_ignorealpha` only covers popups and is usually close to
+        // 1, which would leave translucent panels unblurred).
+        let alpha = match self.options.get(IGNORE_ALPHA_OPTION) {
+            serde_json::Value::Bool(false) => None,
+            v => Some(v.as_f64().unwrap_or(DEFAULT_IGNORE_ALPHA)),
+        };
         for rule in hyprland::blur_rules(ns, popups, alpha) {
             if let Err(e) = hyprland::eval(&rule) {
                 tracing::warn!("layer rule for '{ns}': {e:#}");
