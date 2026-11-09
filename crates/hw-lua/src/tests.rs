@@ -267,3 +267,25 @@ fn set_option_writes_widget_custom_file() {
     let (core, _rt) = load(dir, None);
     assert_eq!(core.options.get("decoration:rounding"), json!(7));
 }
+
+#[test]
+fn theme_palette_and_partial() {
+    let dir = config_dir("theme", &[("hyprwidget.lua", "")]);
+    let (core, rt) = load(dir, None);
+    let out = rt
+        .eval(
+            r##"(function()
+                hw.theme:set_source("#cc3333", "light")
+                local c = hw.theme.colors()
+                return hw.theme.mode() .. " " .. tostring(c.primary:match("^#%x+$") ~= nil)
+            end)()"##,
+        )
+        .unwrap();
+    assert_eq!(out, "light true");
+    let partials = core.scss_partials.borrow();
+    let m = partials.get("material").unwrap();
+    assert!(
+        m.contains("$md-mode: light;") && m.contains("$md-source: #cc3333;"),
+        "{m}"
+    );
+}

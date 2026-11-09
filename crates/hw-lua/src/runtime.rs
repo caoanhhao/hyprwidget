@@ -1085,6 +1085,7 @@ fn install(lua: &Lua, st: &Rc<RtState>) -> Result<()> {
     };
     hw.set("monitors", monitors)?;
     crate::service::install(lua, &hw)?;
+    crate::service::install_theme(lua, &hw)?;
     hw.set(
         "per_monitor",
         lua.create_function(|lua, f: Function| {

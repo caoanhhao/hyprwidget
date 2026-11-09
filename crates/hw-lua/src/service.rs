@@ -123,3 +123,33 @@ pub fn install(lua: &Lua, hw: &Table) -> Result<()> {
     )?;
     Ok(())
 }
+
+/// `hw.theme`: the `theme` service (wallpaper palette), whose generated
+/// SCSS is kept in the `_material.scss` partial (`@import "material";`).
+pub fn install_theme(lua: &Lua, hw: &Table) -> Result<()> {
+    let st = RtState::get(lua)?;
+    let Some(svc) = st.core.services.get("theme")? else {
+        return Ok(());
+    };
+    let scss = svc
+        .prop("scss")
+        .cloned()
+        .ok_or_else(|| mlua::Error::runtime("theme: no scss prop"))?;
+    let write = |lua: &Lua, v: &serde_json::Value| {
+        if let Some(text) = v.as_str()
+            && let Err(e) = crate::runtime::set_partial(lua, "material", text)
+        {
+            tracing::error!("hw.theme: {e}");
+        }
+    };
+    write(lua, &scss.get());
+    let weak = lua.weak();
+    let sub = scss.subscribe(move |v| {
+        if let Some(lua) = weak.try_upgrade() {
+            write(&lua, v);
+        }
+    });
+    st.keep(Box::new(sub));
+    hw.set("theme", LuaService(svc))?;
+    Ok(())
+}
