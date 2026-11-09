@@ -552,6 +552,11 @@ fn set_kind_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(
                 e.set_text(&t);
             }
         }
+        // Cursor position; -1 = end of text.
+        (Kind::Entry, "position" | "cursor_position") => w
+            .downcast_ref::<gtk4::Entry>()
+            .unwrap()
+            .set_position(int()?),
         (Kind::Entry, "placeholder" | "placeholder_text") => w
             .downcast_ref::<gtk4::Entry>()
             .unwrap()
@@ -1071,6 +1076,8 @@ pub const EVENTS: &[&str] = &[
     "on_key",
     "on_change",
     "on_activate",
+    "on_show",
+    "on_hide",
     "on_destroy",
 ];
 
@@ -1212,6 +1219,17 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
             }
             _ => return Err(format!("{} has no on_activate", kind.name())),
         },
+        // Mapped / unmapped (a window shown or hidden, a revealed child…).
+        "on_show" => {
+            w.connect_map(move |_| {
+                h(Event::Value(Prop::Bool(true)));
+            });
+        }
+        "on_hide" => {
+            w.connect_unmap(move |_| {
+                h(Event::Value(Prop::Bool(false)));
+            });
+        }
         "on_destroy" => {
             w.connect_destroy(move |_| {
                 h(Event::Destroy);

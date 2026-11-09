@@ -1,0 +1,61 @@
+// Fallbacks for the AGS theme variables used by the notification and
+// launcher partials (~/.config/ags/scss/{constants,colors,defaultColors}).
+// Everything is `!default`: the base theme, when imported first, wins.
+
+$phi: 1.618 !default;
+$phi-min: $phi - 1 !default;
+$phi-percentage: $phi-min * 100 !default;
+
+$OPACITY: 0.65 !default;
+$FONT-SIZE: 12px !default;
+$SCALE: 10px !default;
+
+$background: #08080c !default;
+$foreground: #aaabb2 !default;
+$color1: #493028 !default;
+$color2: #413945 !default;
+$color3: #4e505d !default;
+
+$secondary: mix($color2, $foreground, $phi-percentage) !default;
+$tertiary: $color3 !default;
+$red: mix($background, rgb(169, 69, 69), $phi-percentage) !default;
+
+$background-transparent: rgba($background, $OPACITY) !default;
+$background-semi-transparent: rgba($background, $OPACITY + 0.2) !default;
+$background-secondary: mix($background, $secondary, $phi-percentage) !default;
+$foreground-secondary: mix($foreground, $secondary, $phi-percentage) !default;
+$foreground-tertiary: mix($foreground, $tertiary, $phi-percentage) !default;
+$background-tertiary: mix($background, $tertiary, $phi-percentage) !default;
+
+// AGS lib.scss `module` / `button-checked`, under local names.
+@mixin m3b-module {
+  background: $background-transparent;
+  color: $foreground;
+  font-size: $FONT-SIZE;
+  text-shadow: none;
+  border: none;
+  box-shadow: none;
+  min-height: 1px;
+  border-radius: 10px;
+  margin: 0;
+  padding: $SCALE / 2 $SCALE / 1.5;
+
+  &,
+  * {
+    transition: all 0.2s;
+  }
+}
+
+@mixin m3b-button-checked {
+  background: $foreground-secondary;
+  color: $background;
+}
+
+@keyframes m3b-opacity-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,123 @@
+// App launcher (AGS scss/widgets/app-launcher.scss + keybind.scss).
+@import "widget-defaults";
+
+.app-launcher {
+  font-family: "JetBrainsMono NFP", monospace;
+  min-height: 600px;
+  color: $foreground;
+
+  button {
+    @include m3b-module;
+    padding: 1em;
+    min-width: 25px;
+    background-color: $background-transparent;
+
+    &:hover {
+      background-color: $background-semi-transparent;
+    }
+
+    .description {
+      color: $foreground-tertiary;
+      font-size: 0.9em;
+      opacity: 0.8;
+    }
+    .argument {
+      color: $foreground-secondary;
+    }
+    // AGS highlights the focused button; the keyboard selection uses the
+    // same look.
+    &:focus,
+    &.checked {
+      @include m3b-button-checked;
+      .argument {
+        color: $background-secondary;
+      }
+      .description {
+        color: $background-tertiary;
+      }
+    }
+  }
+
+  entry {
+    all: unset;
+    padding: 8px 10px;
+    border-radius: 10px;
+    color: $foreground;
+    background: $background-transparent;
+    caret-color: $foreground;
+    &:focus {
+      box-shadow: unset;
+    }
+  }
+
+  .center {
+    @include m3b-module;
+    padding: 10px;
+
+    .help {
+      font-size: 1.1em;
+      font-weight: bold;
+      animation: m3b-opacity-in 0.4s ease-in;
+
+      > box {
+        @include m3b-module;
+        padding: 10px;
+      }
+
+      .description {
+        color: $foreground-tertiary;
+        font-size: 0.9em;
+        opacity: 0.8;
+      }
+    }
+  }
+
+  .app-actions button {
+    padding: 0.5em 1em;
+  }
+
+  .quick-apps {
+    @include m3b-module;
+    padding: 10px;
+  }
+  .history {
+    @include m3b-module;
+    padding: 10px;
+  }
+
+  .launcher-player {
+    @include m3b-module;
+    padding: 10px;
+
+    .cover {
+      border-radius: 10px;
+    }
+    .title {
+      color: $secondary;
+      font-weight: bold;
+    }
+    .artist {
+      color: $foreground-secondary;
+    }
+    .controls button {
+      padding: 0.3em 0.8em;
+    }
+  }
+
+  .keybind {
+    .binding {
+      padding: 2px 6px;
+      border-top: 1px solid;
+      border-left: 1px solid;
+      border-right: 1px solid;
+      border-bottom: 5px solid;
+      border-color: rgba($secondary, 0.8);
+      font-size: 0.8rem;
+      min-width: 0px;
+
+      &:hover {
+        border: 1px solid $secondary;
+      }
+    }
+  }
+}
