@@ -29,7 +29,7 @@ M.SELECTORS = {
   WayDroid = "WayDroid",
   UserProfile = "UserProfile",
   BooruViewer = "BooruViewer",
-  Settings = "Settings",
+  Settings = "SettingsWidget",
   CustomScripts = "CustomScripts",
   KeyBinds = "KeyBinds",
 }

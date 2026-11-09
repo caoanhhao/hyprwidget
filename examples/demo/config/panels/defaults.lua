@@ -48,20 +48,6 @@ local function api_keys(name)
   }
 end
 
--- Current Hyprland value of `opt` (e.g. "general:gaps_in"), else `default`.
-local function hypr(opt, default)
-  local ok, v = pcall(function()
-    return hw.option(opt):peek()
-  end)
-  if ok and type(v) == "table" then
-    v = v.top or v[1]
-  end
-  if ok and (type(v) == "number" or type(v) == "boolean") then
-    return v
-  end
-  return default
-end
-
 function M.defaults()
   return {
     ["rightPanel.exclusivity"] = true,
@@ -127,46 +113,6 @@ function M.defaults()
       0,
       1,
       "Enable dynamic theme variants (light/dark) based on the current wallpaper"
-    ),
-
-    -- Seeded from the running Hyprland so the Settings widget starts from
-    -- the real values (AGS used fixed defaults).
-    ["hyprland.general.border_size"] = setting("Border Size", hypr("general:border_size", 0), "int", 0, 10),
-    ["hyprland.general.gaps_in"] = setting("Gaps In", hypr("general:gaps_in", 7), "int", 0, 20),
-    ["hyprland.general.gaps_out"] = setting("Gaps Out", hypr("general:gaps_out", 10), "int", 0, 40),
-    ["hyprland.decoration.rounding"] = setting("Rounding", hypr("decoration:rounding", 16), "int", 0, 50),
-    ["hyprland.decoration.active_opacity"] = setting(
-      "Active Opacity",
-      hypr("decoration:active_opacity", 0.9),
-      "float",
-      0,
-      1
-    ),
-    ["hyprland.decoration.inactive_opacity"] = setting(
-      "Inactive Opacity",
-      hypr("decoration:inactive_opacity", 0.8),
-      "float",
-      0,
-      1
-    ),
-    ["hyprland.decoration.blur.enabled"] = setting("Blur Enabled", hypr("decoration:blur:enabled", true), "bool", 0, 1),
-    ["hyprland.decoration.blur.size"] = setting("Blur Size", hypr("decoration:blur:size", 4), "int", 0, 10),
-    ["hyprland.decoration.blur.passes"] = setting("Blur Passes", hypr("decoration:blur:passes", 4), "int", 0, 10),
-    ["hyprland.decoration.blur.xray"] = setting("Blur Xray", hypr("decoration:blur:xray", false), "bool", 0, 1),
-    ["hyprland.decoration.shadow.enabled"] = setting(
-      "Shadow Enabled",
-      hypr("decoration:shadow:enabled", true),
-      "bool",
-      0,
-      1
-    ),
-    ["hyprland.decoration.shadow.range"] = setting("Shadow Range", hypr("decoration:shadow:range", 15), "int", 0, 20),
-    ["hyprland.decoration.shadow.render_power"] = setting(
-      "Shadow Render Power",
-      hypr("decoration:shadow:render_power", 3),
-      "int",
-      0,
-      20
     ),
   }
 end
