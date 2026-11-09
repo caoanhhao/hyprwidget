@@ -9,6 +9,11 @@ require_all({
   "services",
   "notifications",
   "launcher",
+  "settings_widget",
+  "userpanel",
+  "wallpaper",
+  "always_on",
+  "keystrokes",
 })
 
 require_custom_dir()

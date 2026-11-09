@@ -57,6 +57,7 @@ end
 return function()
   local audio = hw.service.audio
   local brightness = hw.service.brightness
+  local sun = hw.service.hyprsunset
   local volume = audio.speaker:map(function(s)
     return s and s.volume or 0
   end)
@@ -85,6 +86,30 @@ return function()
           brightness:set(v)
         end,
         brightness.available
+      ),
+      -- Night light (hyprsunset): 1000 K .. 6500 K; the icon turns it off.
+      slider(
+        W.Button({
+          class = "icon",
+          label = sun.identity:map(function(off)
+            return off and "󰖨" or "󰖔"
+          end),
+          tooltip_markup = sun.temperature:map(function(k)
+            return "Night light: " .. tostring(math.floor(tonumber(k) or 0)) .. " K\nClick: off (identity)"
+          end),
+          on_click = function()
+            pcall(sun.set_identity, sun)
+          end,
+        }),
+        sun.temperature:map(function(k)
+          return ((tonumber(k) or 6500) - 1000) / 5500
+        end),
+        function(v)
+          local k = math.floor(1000 + v * 5500 + 0.5)
+          hw.settings:set("hyprsunset.kelvin", k)
+          pcall(sun.set_temperature, sun, k)
+        end,
+        sun.available
       ),
     }),
     Box({

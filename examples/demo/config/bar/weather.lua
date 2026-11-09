@@ -362,4 +362,7 @@ function M.button(on_active)
   })
 end
 
+-- Full weather card (AGS <Weather />), also used by the always-on widget.
+M.details = details
+
 return M
