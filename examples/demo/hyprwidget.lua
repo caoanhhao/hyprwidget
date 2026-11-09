@@ -9,6 +9,7 @@ require_all({
   "services",
   "notifications",
   "launcher",
+  "embed",
 })
 
 require_custom_dir()

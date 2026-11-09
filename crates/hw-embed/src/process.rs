@@ -88,6 +88,14 @@ pub(crate) fn spawn(
         .env_remove("WAYLAND_DISPLAY")
         .process_group(0);
     cmd.envs(env.iter().map(|(k, v)| (k, v)));
+    // SAFETY: only async-signal-safe prctl between fork and exec. The app
+    // must not outlive hyprwidget (socket-mode apps survive a lost display).
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
 
     let mut guard = None;
     let mut client_end = None;
