@@ -189,9 +189,16 @@ fn connect(lua: &Lua, w: &gtk4::Widget, kind: Kind, event: &str, f: Function) ->
     let weak_lua = lua.weak();
     let weak_w = w.downgrade();
     let handler: widgets::Handler = Rc::new(move |ev| {
-        let (Some(lua), Some(w)) = (weak_lua.try_upgrade(), weak_w.upgrade()) else {
+        let Some(lua) = weak_lua.try_upgrade() else {
             return false;
         };
+        // GLib clears weak refs before disposing an object whose last
+        // reference drops (a child removed by `hw.For`), so `on_destroy`
+        // still runs then, with a nil `self`.
+        let w = weak_w.upgrade();
+        if w.is_none() && !matches!(ev, Event::Destroy) {
+            return false;
+        }
         let args = match event_args(&lua, ev) {
             Ok(a) => a,
             Err(e) => {
@@ -200,12 +207,15 @@ fn connect(lua: &Lua, w: &gtk4::Widget, kind: Kind, event: &str, f: Function) ->
             }
         };
         let mut all = mlua::MultiValue::new();
-        match lua.create_userdata(LuaWidget {
-            widget: w,
-            kind: Some(kind),
+        match w.map(|widget| {
+            lua.create_userdata(LuaWidget {
+                widget,
+                kind: Some(kind),
+            })
         }) {
-            Ok(ud) => all.push_back(Value::UserData(ud)),
-            Err(_) => return false,
+            Some(Ok(ud)) => all.push_back(Value::UserData(ud)),
+            Some(Err(_)) => return false,
+            None => all.push_back(Value::Nil),
         }
         all.extend(args);
         !matches!(

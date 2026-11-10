@@ -370,6 +370,9 @@ end)
 -- right panel) stops it, like AGS' onCleanup.
 
 local function enabled(name)
+  if common.RUNTIME_ONLY[name] then
+    return common.runtime_widgets:peek()[name] == true
+  end
   for _, w in ipairs(hw.settings:get("rightPanel.widgets") or {}) do
     if w.name == name then
       return w.enabled == true

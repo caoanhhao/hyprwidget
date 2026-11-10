@@ -15,6 +15,12 @@ M.run = util.run
 -- hw.For with props for its box (`vertical`, `spacing`, …).
 M.For = util.For
 
+-- Right panel widgets whose on/off lives only in this run, never in
+-- `rightPanel.widgets`: each load reads them from the service itself.
+M.RUNTIME_ONLY = { WayDroid = true }
+-- name -> true for the runtime-only widgets enabled now.
+M.runtime_widgets = hw.state({})
+
 local Box = M.Box
 
 -- `<side>Panel.width` is the whole panel layer, like `panel_width_default` in

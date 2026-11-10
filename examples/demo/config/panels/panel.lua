@@ -303,13 +303,46 @@ end
 
 -- Right panel ---------------------------------------------------------------
 
-local widgets = hw.settings["rightPanel.widgets"]
+local stored = hw.settings["rightPanel.widgets"]
+-- The stored list with the runtime-only widgets' on/off from this run.
+local widgets = hw.computed(function()
+  local list = copy_list(stored())
+  local on = common.runtime_widgets()
+  for _, w in ipairs(list) do
+    if common.RUNTIME_ONLY[w.name] then
+      w.enabled = on[w.name] == true
+    end
+  end
+  return list
+end)
 -- Name of the widget enabled last (gets the `new-widget` fade-in).
 local newest = nil
 
+-- Runtime-only widgets are always stored disabled.
 local function set_widgets(list)
-  hw.settings:set("rightPanel.widgets", list)
+  local on = {}
+  local saved = copy_list(list)
+  for _, w in ipairs(saved) do
+    if common.RUNTIME_ONLY[w.name] then
+      on[w.name] = w.enabled == true
+      w.enabled = false
+    end
+  end
+  common.runtime_widgets:set(on)
+  hw.settings:set("rightPanel.widgets", saved)
 end
+-- Clears a runtime-only widget saved enabled before this rule.
+set_widgets(widgets:peek())
+-- WayDroid's button starts as the session is: on only while it runs.
+hw.exec_async({ "waydroid", "status" }, function(out, err)
+  if not err and out:find("Session:%s*RUNNING") then
+    local on = { WayDroid = true }
+    for name, v in pairs(common.runtime_widgets:peek()) do
+      on[name] = on[name] or v
+    end
+    common.runtime_widgets:set(on)
+  end
+end)
 
 -- AGS rightPanelWidgetSelectors[NotificationHistory].onRightClick.
 local RIGHT_CLICK = {
