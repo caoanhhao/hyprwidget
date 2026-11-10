@@ -63,7 +63,7 @@ Handler nhận `self` (widget) rồi các tham số. Trả về `true` để ch�
 | `on_activate` | text | Entry (Enter) |
 | `on_show` | `true` | mọi widget (map: window hiện, revealer mở…) |
 | `on_hide` | `false` | mọi widget (unmap) |
-| `on_destroy` | | mọi widget |
+| `on_destroy` | | mọi widget (`self` là `nil` khi widget đã bị dispose, vd. bị `hw.For` gỡ) |
 | `on_title` | title | App |
 | `on_exit` | exit code | App, Terminal |
 

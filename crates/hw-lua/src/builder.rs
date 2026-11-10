@@ -207,15 +207,20 @@ fn connect(lua: &Lua, w: &gtk4::Widget, kind: Kind, event: &str, f: Function) ->
             }
         };
         let mut all = mlua::MultiValue::new();
-        match w.map(|widget| {
-            lua.create_userdata(LuaWidget {
-                widget,
-                kind: Some(kind),
+        match w
+            .map(|widget| {
+                lua.create_userdata(LuaWidget {
+                    widget,
+                    kind: Some(kind),
+                })
             })
-        }) {
-            Some(Ok(ud)) => all.push_back(Value::UserData(ud)),
-            Some(Err(_)) => return false,
-            None => all.push_back(Value::Nil),
+            .transpose()
+        {
+            Ok(ud) => all.push_back(ud.map_or(Value::Nil, Value::UserData)),
+            Err(e) => {
+                log_lua_error(&lua, "event", &e);
+                return false;
+            }
         }
         all.extend(args);
         !matches!(

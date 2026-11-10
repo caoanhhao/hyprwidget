@@ -65,7 +65,7 @@ coroutine (they can call `hw.exec_async(cmd)`).
 | `on_activate` | text | Entry (Enter) |
 | `on_show` | `true` | every widget (map: window shown, revealer opened…) |
 | `on_hide` | `false` | every widget (unmap) |
-| `on_destroy` | | every widget |
+| `on_destroy` | | every widget (`self` is `nil` once the widget is already disposed, e.g. removed by `hw.For`) |
 | `on_title` | title | App |
 | `on_exit` | exit code | App, Terminal |
 
