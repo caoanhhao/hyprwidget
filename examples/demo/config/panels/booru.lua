@@ -21,6 +21,18 @@ local MAX_AVATAR_SIZE = 500 * 1024
 local RATING = "-?rating:explicit"
 local q = common.sh_quote
 
+-- Image grid of the Booru viewer (widget options, in px; override them in
+-- config/custom/, e.g. `hw.config({ booru = { padding = 8, spacing = 4 } })`):
+--   booru:padding  space around the viewer (default 6)
+--   booru:spacing  gap between grid columns and between images (default 5)
+local function px_option(name, default)
+  return hw.option(name):map(function(v)
+    return tonumber(v) or default
+  end)
+end
+local grid_padding = px_option("booru:padding", 6)
+local grid_spacing = px_option("booru:spacing", 5)
+
 local M = {}
 
 -- Image helpers -----------------------------------------------------------
@@ -759,10 +771,13 @@ hw.define("BooruViewer", function(props)
   local page_a, page_b = hw.state(images:peek()), hw.state({})
   local function images_page(list)
     local cols = masonry(list, hw.settings:get("booru.columns") or 2)
-    local column_width = (hw.settings:get("leftPanel.width") or 400) / #cols - 10
-    local row = { class = "images", spacing = 5 }
+    local pad, gap = grid_padding:peek(), grid_spacing:peek()
+    -- The panel's content width shared by the columns, less the padding on
+    -- both sides and the gaps between columns.
+    local column_width = (common.panel_content_width("left"):peek() - 2 * pad - gap * (#cols - 1)) / #cols
+    local row = { class = "images", spacing = gap }
     for _, col in ipairs(cols) do
-      local c = { vertical = true, spacing = 5, hexpand = true }
+      local c = { vertical = true, spacing = gap, hexpand = true }
       for _, img in ipairs(col.items) do
         table.insert(c, ImageButton(img, column_width, props.on_active))
       end
@@ -787,7 +802,7 @@ hw.define("BooruViewer", function(props)
           min = 0,
           max = 1,
           step = 1 / steps,
-          width_request = hw.settings["leftPanel.width"]:map(function(wd)
+          width_request = common.panel_content_width("left"):map(function(wd)
             return math.floor((wd or 400) / 2)
           end),
           value = value,
@@ -811,6 +826,7 @@ hw.define("BooruViewer", function(props)
 
   local root = Box({
     class = "booru",
+    margin = grid_padding,
     vertical = true,
     hexpand = true,
     spacing = 10,
@@ -893,7 +909,7 @@ hw.define("BooruViewer", function(props)
               spacing = 5,
               halign = "center",
               hw.With(page, function(current)
-                local total = math.floor((hw.settings:get("leftPanel.width") or 400) / 100 + 2)
+                local total = math.floor((common.panel_content_width("left"):peek() or 400) / 100 + 2)
                 local buttons = { spacing = 5 }
                 if current > 6 then
                   table.insert(
@@ -1389,7 +1405,7 @@ hw.define("Waifu", function(props)
     hw.settings["waifuWidget.random_interval"]:subscribe(update_interval)
     update_interval()
   end
-  local width = hw.settings["rightPanel.width"]
+  local width = common.panel_content_width("right")
   local current = hw.settings["waifuWidget.current"]
   local key = hw.computed(function()
     local c, wd = current(), width()

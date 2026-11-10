@@ -139,7 +139,13 @@ local function PanelWindow(monitor, side, content, popup_open)
   local key = side .. "Panel"
   local name = side .. "-panel-" .. monitor.name
   local lock = hw.settings[key .. ".lock"]
-  local exclusive = hw.settings[key .. ".exclusivity"]
+  -- A locked (pinned) panel always reserves its space, so it never covers
+  -- windows; an unlocked one follows `<side>Panel.exclusivity`.
+  local exclusive = hw.computed(function()
+    return lock() == true or hw.settings[key .. ".exclusivity"]() == true
+  end)
+  local width = hw.settings[key .. ".width"]
+  local gap = common.panel_gap(side)
   local hide_timer
   local function hide()
     local win = hw.window.get(name)
@@ -188,7 +194,18 @@ local function PanelWindow(monitor, side, content, popup_open)
       end
       return false
     end,
-    content,
+    -- The layer is exactly `<side>Panel.width` wide and starts at the screen
+    -- edge; the gap keeps the visible panel on the column's window borders.
+    Box({
+      class = "panel-body",
+      margin = gap:map(function(g)
+        return { [side] = g }
+      end),
+      width_request = hw.computed(function()
+        return math.max(0, (width() or 400) - gap())
+      end),
+      content,
+    }),
   })
 end
 
@@ -277,7 +294,6 @@ local function LeftPanel(monitor)
         hexpand = true,
         vertical = true,
         spacing = 10,
-        width_request = hw.settings["leftPanel.width"],
         W.Stack(stack),
       }),
     }),
@@ -314,9 +330,8 @@ local RIGHT_CLICK = {
 local function RightPanel(monitor)
   local on_active, popup_open = common.popup_counter()
   local name = "right-panel-" .. monitor.name
-  local width = hw.settings["rightPanel.width"]
-  local height = width:map(function(w)
-    return (w or 250) - 20
+  local height = common.panel_content_width("right"):map(function(w)
+    return w - 20
   end)
 
   local selectors = common.For(widgets, function(w, i)
@@ -383,7 +398,6 @@ local function RightPanel(monitor)
         class = "main-content",
         hexpand = true,
         vertical = true,
-        width_request = width,
         common.For(enabled, function(widget_name)
           local cls = widget_name == newest and "new-widget" or ""
           return selector_widget(widget_name, {
@@ -399,7 +413,7 @@ local function RightPanel(monitor)
         halign = "end",
         vertical = true,
         Box({ class = "widget-actions", vertical = true, spacing = 5, selectors }),
-        WindowActions("rightPanel", name, 250, 1500),
+        WindowActions("rightPanel", name, 400, 1500),
       }),
     }),
     popup_open

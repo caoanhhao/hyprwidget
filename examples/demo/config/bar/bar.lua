@@ -17,6 +17,11 @@ local MODULES = {
 }
 
 local lock = hw.settings["bar.lock"]
+-- A locked bar always reserves its space, so it never covers windows; an
+-- auto-hiding one follows `bar.exclusivity`.
+local exclusive = hw.computed(function()
+  return lock() == true or hw.settings["bar.exclusivity"]() == true
+end)
 local top = hw.settings["bar.orientation"]
 local layout = hw.settings["bar.layout"]
 -- AGS globalMargin = general:gaps_out (first value).
@@ -27,6 +32,9 @@ end)
 local function anchor(on_top)
   return on_top and { "top", "left", "right" } or { "bottom", "left", "right" }
 end
+
+-- How long a brightness change shows the (auto-hiding) bar, in ms.
+local PEEK_MS = 2500
 
 -- AGS fullscreenClient: the focused window is fullscreen (mode 2).
 local fullscreen = hypr.focused_client:map(function(c)
@@ -75,6 +83,25 @@ local function Bar(monitor)
     popups = math.max(0, popups + (open and 1 or -1))
   end
   local hide_timer
+  -- The pointer is over the bar.
+  local hovering = false
+  local brightness = hw.service.brightness.brightness
+  -- Hides the auto-hiding bar after `ms`, unless it gets locked or a
+  -- popover is open by then.
+  local function hide_later(ms)
+    if lock:peek() then
+      return
+    end
+    if hide_timer then
+      hide_timer:cancel()
+    end
+    hide_timer = hw.timeout(ms, function()
+      hide_timer = nil
+      if not lock:peek() and not hovering and popups == 0 then
+        shown:set(false)
+      end
+    end)
+  end
 
   local centerbox = hw.With(layout, function(list)
     local enabled = {}
@@ -103,7 +130,9 @@ local function Bar(monitor)
     class = "Bar",
     monitor = monitor,
     layer = "top",
-    exclusivity = "exclusive",
+    exclusivity = exclusive:map(function(e)
+      return e and "exclusive" or "normal"
+    end),
     anchor = top:map(anchor),
     margin = hw.computed(function()
       local m, on_top = gaps_out(), top()
@@ -119,23 +148,34 @@ local function Bar(monitor)
           shown:set(true)
         end
       end)
+      -- A brightness change (keys, another program) shows the bar for a
+      -- moment; its brightness slider reveals itself with the new value.
+      local last = brightness:peek()
+      brightness:subscribe(function(v)
+        if v == nil or v == last then
+          return
+        end
+        local first = last == nil
+        last = v
+        if first or lock:peek() then
+          return
+        end
+        shown:set(true)
+        if not hovering then
+          hide_later(PEEK_MS)
+        end
+      end)
     end,
     on_hover = function()
+      hovering = true
       if hide_timer then
         hide_timer:cancel()
         hide_timer = nil
       end
     end,
     on_leave = function()
-      if lock:peek() then
-        return
-      end
-      hide_timer = hw.timeout(100, function()
-        hide_timer = nil
-        if not lock:peek() and popups == 0 then
-          shown:set(false)
-        end
-      end)
+      hovering = false
+      hide_later(100)
     end,
 
     Box({

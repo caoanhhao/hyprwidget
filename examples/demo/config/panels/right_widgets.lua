@@ -17,7 +17,7 @@ end)
 
 -- Columns stack vertically while the panel is narrower than 400 px.
 hw.define("SystemResources", function(props)
-  local vertical = hw.settings["rightPanel.width"]:map(function(w)
+  local vertical = common.panel_content_width("right"):map(function(w)
     return (w or 250) < 400
   end)
   return Box({

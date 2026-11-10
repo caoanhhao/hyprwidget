@@ -17,6 +17,31 @@ M.For = util.For
 
 local Box = M.Box
 
+-- `<side>Panel.width` is the whole panel layer, like `panel_width_default` in
+-- the Hyprland main layout: the visible panel spans gaps_out .. width from the
+-- screen edge, the same box as the window borders of the layout column below.
+-- Width of the `.panel-actions` column (buttons + padding).
+M.PANEL_ACTIONS_WIDTH = 35
+
+-- general:gaps_out on the panel's screen edge ("left" or "right").
+function M.panel_gap(side)
+  return hw.opt.general.gaps_out:map(function(g)
+    if type(g) == "table" then
+      return tonumber(g[side]) or 0
+    end
+    return tonumber(g) or 0
+  end)
+end
+
+-- Width left for the panel's widgets: layer width minus gap and actions.
+function M.panel_content_width(side)
+  local width = hw.settings[side .. "Panel.width"]
+  local gap = M.panel_gap(side)
+  return hw.computed(function()
+    return math.max(0, (width() or 400) - gap() - M.PANEL_ACTIONS_WIDTH)
+  end)
+end
+
 -- AGS ~/.config/ags/cache, here $XDG_CACHE_HOME/hyprwidget.
 M.CACHE_DIR = util.CACHE_DIR
 

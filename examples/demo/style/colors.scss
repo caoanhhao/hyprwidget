@@ -30,5 +30,9 @@ $foreground-secondary: mix($foreground, $secondary, $phi-percentage);
 
 $background-semi-transparent: rgba($background, $OPACITY + 0.2);
 
+// Behind the side panels' widgets: much lighter than $background-transparent,
+// since the widgets bring their own backgrounds.
+$panel-background: rgba($background, $OPACITY * 0.3);
+
 $foreground-tertiary: mix($foreground, $tertiary, $phi-percentage);
 $background-tertiary: mix($background, $tertiary, $phi-percentage);

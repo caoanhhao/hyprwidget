@@ -119,7 +119,8 @@ local function debounced(key, ms, fn)
 end
 
 local function title(meta)
-  return W.Label({ hexpand = true, xalign = 0, label = meta.name })
+  -- Wrap long names so they don't push the panel past `leftPanel.width`.
+  return W.Label({ hexpand = true, xalign = 0, wrap = true, label = meta.name })
 end
 
 -- One AGSSetting row: slider (int/float), switch (bool), toggles (select),

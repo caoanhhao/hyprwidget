@@ -21,7 +21,7 @@ end
 hw.define("UserProfile", function(props)
   local status = hw.state("idle")
   local text = hw.state("Pick a profile picture")
-  local size = hw.settings["leftPanel.width"]:map(function(w)
+  local size = common.panel_content_width("left"):map(function(w)
     return math.floor((w or 400) / 2)
   end)
   return Box({

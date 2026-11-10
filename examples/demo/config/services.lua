@@ -45,6 +45,27 @@ hw.on_request("apps", function(args)
   return names
 end)
 
+-- `hyprwidget request brightness +10` (or -10, or 50 to set it): for the
+-- brightness keys in Hyprland's binds. Through hw.service.brightness, a held
+-- key only queues the latest value instead of starting a ddcutil per repeat.
+-- Returns the new brightness in percent.
+hw.on_request("brightness", function(args)
+  local b = hw.service.brightness
+  local arg = args[1] or ""
+  local n = tonumber(arg)
+  if not n then
+    error("usage: brightness +N | -N | N (percent)")
+  end
+  local current = b.brightness:peek()
+  if current == nil then
+    error("no display with adjustable brightness")
+  end
+  local v = arg:match("^[+-]") and current + n / 100 or n / 100
+  v = math.max(0, math.min(1, v))
+  b:set(v)
+  return math.floor(v * 100 + 0.5)
+end)
+
 hw.per_monitor(function(monitor)
   local hypr = hw.service.hyprland
   local sys = hw.service.sysinfo

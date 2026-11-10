@@ -48,11 +48,11 @@ end
 
 function M.defaults()
   return {
-    ["rightPanel.exclusivity"] = true,
+    ["rightPanel.exclusivity"] = false,
     ["rightPanel.lock"] = false,
-    ["rightPanel.width"] = 250,
+    ["rightPanel.width"] = 400,
     ["rightPanel.widgets"] = M.RIGHT_WIDGETS,
-    ["leftPanel.exclusivity"] = true,
+    ["leftPanel.exclusivity"] = false,
     ["leftPanel.lock"] = false,
     ["leftPanel.width"] = 400,
     ["leftPanel.widget"] = M.LEFT_WIDGETS[1],

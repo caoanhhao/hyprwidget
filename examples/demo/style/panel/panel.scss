@@ -2,6 +2,13 @@
   @include module;
   padding: 0px;
 
+  // The window itself stays transparent (window.hw-window in main.scss), so
+  // the background goes on the box inside the gap; same color on both sides.
+  .panel-body {
+    background: $panel-background;
+    border-radius: $rounding;
+  }
+
   .panel-actions {
     background: $background;
     padding: 5px;

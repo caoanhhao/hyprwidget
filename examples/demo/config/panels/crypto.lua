@@ -308,7 +308,7 @@ local function Item(entry, width)
 end
 
 hw.define("CryptoViewer", function(props)
-  local width = hw.settings["rightPanel.width"]
+  local width = common.panel_content_width("right")
   return Box({
     class = common.class("crypto-widget", props.class),
     vertical = true,

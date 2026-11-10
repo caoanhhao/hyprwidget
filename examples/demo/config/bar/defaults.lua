@@ -13,6 +13,10 @@ M.defaults = {
   ["ui.scale"] = setting("Scale", 10, "int", 10, 30),
   ["ui.fontSize"] = setting("Font Size", 12, "int", 10, 30),
   ["bar.lock"] = true,
+  -- Off: while unlocked (auto-hiding), the bar floats over windows instead of
+  -- reserving space, like the side panels, so showing it never resizes the
+  -- tiled windows. A locked bar always reserves its space.
+  ["bar.exclusivity"] = false,
   ["bar.orientation"] = setting("Orientation", true, "bool", 0, 1),
   ["bar.layout"] = {
     { name = "workspaces", icon = "󰒘", enabled = true },
