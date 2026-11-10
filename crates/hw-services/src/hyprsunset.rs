@@ -106,7 +106,7 @@ fn socket() -> Result<PathBuf> {
 }
 
 /// One request (hyprsunset answers and closes).
-fn request(cmd: &str) -> Result<String> {
+pub(crate) fn request(cmd: &str) -> Result<String> {
     let path = socket()?;
     let mut s = UnixStream::connect(&path).context("hyprsunset is not running")?;
     s.set_read_timeout(Some(Duration::from_secs(1)))?;

@@ -124,7 +124,11 @@ Pin và AC từ `/sys/class/power_supply`, poll 10 s (không cần daemon; bản
 ## brightness
 
 Màn laptop qua `/sys/class/backlight` (ghi bằng `brightnessctl`) và màn ngoài qua
-DDC/CI (`ddcutil`, VCP 0x10; poll 30 s, cập nhật lạc quan khi set).
+DDC/CI (`ddcutil`, VCP 0x10; poll 30 s, cập nhật lạc quan khi set). Màn ở DDC
+brightness 0 thường vẫn sáng, nên khi `hyprsunset` chạy, 20 % dưới cùng của
+0..1 trên màn DDC làm tối bằng phần mềm: DDC giữ 0 và gamma của hyprsunset giảm
+xuống 0, tối đen (`value` là giá trị DDC thô). Gamma của hyprsunset áp dụng cho mọi
+output, và profile hyprsunset có đặt gamma sẽ ghi đè việc làm tối này.
 
 | Prop | Giá trị |
 |---|---|

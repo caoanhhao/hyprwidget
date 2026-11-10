@@ -7,6 +7,12 @@
 //! dragged would otherwise start dozens of `ddcutil` processes fighting over
 //! the I2C bus.
 //!
+//! A monitor's DDC brightness 0 is often still bright, so while hyprsunset
+//! runs the bottom [`SOFT_RANGE`] of a DDC display's 0..1 is software
+//! dimming: DDC stays at 0 and hyprsunset's gamma goes down to
+//! [`SOFT_FLOOR`]. hyprsunset's gamma covers every output, and one of its
+//! profiles that sets gamma overrides the dimming.
+//!
 //! ```lua
 //! local b = hw.service.brightness
 //! b.brightness()               -- first display, 0..1 (nil if none)
@@ -31,6 +37,10 @@ const BACKLIGHT: &str = "/sys/class/backlight";
 const BACKLIGHT_EVERY: Duration = Duration::from_secs(2);
 /// DDC reads happen every this many backlight ticks (30 s).
 const DDC_EVERY: u32 = 15;
+/// Part of a DDC display's 0..1 below its hardware minimum, done with gamma.
+const SOFT_RANGE: f64 = 0.2;
+/// hyprsunset gamma (fraction) at brightness 0: black, like the screen is off.
+const SOFT_FLOOR: f64 = 0.0;
 
 #[derive(Debug, Clone, PartialEq)]
 struct Display {
@@ -40,15 +50,31 @@ struct Display {
     name: String,
     value: f64,
     max: f64,
+    /// hyprsunset's gamma (1 = none) for DDC displays; `None` without
+    /// hyprsunset, which leaves no software dimming.
+    gamma: Option<f64>,
 }
 
 impl Display {
+    /// 0..1 as the slider shows it, software dimming included.
+    fn level(&self) -> f64 {
+        if self.max <= 0.0 {
+            return 0.0;
+        }
+        let hw = self.value / self.max;
+        match self.gamma {
+            None => hw,
+            Some(_) if self.value > 0.0 => SOFT_RANGE + (1.0 - SOFT_RANGE) * hw,
+            Some(g) => SOFT_RANGE * ((g - SOFT_FLOOR) / (1.0 - SOFT_FLOOR)).clamp(0.0, 1.0),
+        }
+    }
+
     fn json(&self) -> Value {
         json!({
             "id": self.id,
             "kind": self.kind,
             "name": self.name,
-            "brightness": if self.max > 0.0 { (self.value / self.max * 1000.0).round() / 1000.0 } else { 0.0 },
+            "brightness": (self.level() * 1000.0).round() / 1000.0,
             "value": self.value,
             "max": self.max,
         })
@@ -120,15 +146,25 @@ pub fn start() -> Result<Rc<Service>> {
             let only = arg_str(&args, 1, "display").ok();
             let mut list = d.lock().expect("brightness displays lock poisoned");
             let mut hit = false;
+            let mut gamma = None;
             for disp in list
                 .iter_mut()
                 .filter(|x| only.as_ref().is_none_or(|o| *o == x.id))
             {
-                set_display(disp, v, &ddc)?;
+                gamma = set_display(disp, v, &ddc)?.or(gamma);
                 hit = true;
             }
             if !hit {
                 bail!("no such display");
+            }
+            if let Some(g) = gamma {
+                // Gamma is global: every DDC display sees the new value. If
+                // hyprsunset is gone, they fall back to hardware only.
+                let sent = crate::hyprsunset::request(&format!("gamma {}", (g * 100.0).round()));
+                let g = sent.is_ok().then_some(g);
+                for disp in list.iter_mut().filter(|x| x.gamma.is_some()) {
+                    disp.gamma = g;
+                }
             }
             if let Some(svc) = w.upgrade() {
                 for (p, v) in props(&list) {
@@ -216,6 +252,7 @@ fn read_backlights(root: &Path) -> Vec<Display> {
                 value: num("actual_brightness").or_else(|| num("brightness"))?,
                 max: num("max_brightness")?,
                 name,
+                gamma: None,
             })
         })
         .collect();
@@ -223,8 +260,13 @@ fn read_backlights(root: &Path) -> Vec<Display> {
     out
 }
 
-/// `ddcutil detect --brief` + `getvcp 10 --brief` per display.
+/// `ddcutil detect --brief` + `getvcp 10 --brief` per display, and
+/// hyprsunset's gamma (percent) for the software dimming.
 fn read_ddc() -> Vec<Display> {
+    let gamma = crate::hyprsunset::request("gamma")
+        .ok()
+        .and_then(|g| g.parse::<f64>().ok())
+        .map(|g| g / 100.0);
     let _bus = DDC_BUS.lock().expect("ddc bus lock poisoned");
     let Some(detect) = run("ddcutil", &["detect", "--brief"]) else {
         return Vec::new();
@@ -240,6 +282,7 @@ fn read_ddc() -> Vec<Display> {
                 name: conn.unwrap_or_else(|| format!("display {n}")),
                 value,
                 max,
+                gamma,
             })
         })
         .collect()
@@ -289,8 +332,9 @@ fn parse_vcp(s: &str) -> Option<(f64, f64)> {
     None
 }
 
-fn set_display(d: &mut Display, v: f64, ddc: &DdcWriter) -> Result<()> {
-    let raw = (v * d.max).round();
+/// Returns the hyprsunset gamma to set, if this display needs one.
+fn set_display(d: &mut Display, v: f64, ddc: &DdcWriter) -> Result<Option<f64>> {
+    let (raw, gamma) = split_level(d, v);
     if d.kind == "backlight" {
         let dev = d.id.trim_start_matches("backlight:").to_owned();
         spawn_detached("brightnessctl", &["-d", &dev, "set", &format!("{raw}")])?;
@@ -298,7 +342,23 @@ fn set_display(d: &mut Display, v: f64, ddc: &DdcWriter) -> Result<()> {
         ddc.queue(d.id.trim_start_matches("ddc:"), raw);
     }
     d.value = raw;
-    Ok(())
+    Ok(gamma)
+}
+
+/// Level `v` (0..1) → (raw hardware value, hyprsunset gamma to set).
+fn split_level(d: &Display, v: f64) -> (f64, Option<f64>) {
+    let Some(g) = d.gamma else {
+        return ((v * d.max).round(), None);
+    };
+    if v < SOFT_RANGE {
+        let gamma = SOFT_FLOOR + (1.0 - SOFT_FLOOR) * v / SOFT_RANGE;
+        return (0.0, Some((gamma * 100.0).round() / 100.0));
+    }
+    let raw = ((v - SOFT_RANGE) / (1.0 - SOFT_RANGE) * d.max).round();
+    // Leaving the dimmed range restores full gamma; above it, leave
+    // whatever gamma hyprsunset has (its profiles may set one).
+    let undim = d.value <= 0.0 && g < 1.0;
+    (raw, undim.then_some(1.0))
 }
 
 fn spawn_detached(bin: &str, args: &[&str]) -> Result<()> {
@@ -328,6 +388,31 @@ mod tests {
         );
         assert_eq!(parse_vcp("VCP 10 C 50 100\n"), Some((50.0, 100.0)));
         assert_eq!(parse_vcp("VCP 10 ERR"), None);
+    }
+
+    #[test]
+    fn soft_dimming_below_the_hardware_minimum() {
+        let mut d = Display {
+            id: "ddc:1".into(),
+            kind: "ddc",
+            name: "DP-2".into(),
+            value: 50.0,
+            max: 100.0,
+            gamma: Some(1.0),
+        };
+        assert_eq!(d.json()["brightness"], json!(0.6));
+        // Into the dimmed range: DDC 0, gamma down to the floor at 0.
+        assert_eq!(split_level(&d, 0.0), (0.0, Some(SOFT_FLOOR)));
+        assert_eq!(split_level(&d, 0.04), (0.0, Some(0.2)));
+        (d.value, d.gamma) = (0.0, Some(0.2));
+        assert_eq!(d.json()["brightness"], json!(0.04));
+        // Back out of it restores gamma once; above it gamma is left alone.
+        assert_eq!(split_level(&d, 1.0), (100.0, Some(1.0)));
+        (d.value, d.gamma) = (100.0, Some(0.93));
+        assert_eq!(split_level(&d, 0.6), (50.0, None));
+        // Without hyprsunset the range is plain hardware.
+        d.gamma = None;
+        assert_eq!(split_level(&d, 0.1), (10.0, None));
     }
 
     #[test]

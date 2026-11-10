@@ -129,7 +129,11 @@ needed; the UPower version is `upower`).
 
 Laptop screens through `/sys/class/backlight` (written with `brightnessctl`) and
 external screens through DDC/CI (`ddcutil`, VCP 0x10; polled every 30 s, updated
-optimistically on set).
+optimistically on set). A monitor at DDC brightness 0 is often still bright,
+so while `hyprsunset` runs the bottom 20 % of a DDC screen's 0..1 dims in
+software: DDC stays at 0 and hyprsunset's gamma goes down to 0, black (`value` is
+the raw DDC value). hyprsunset's gamma applies to every output, and a
+hyprsunset profile that sets gamma overrides the dimming.
 
 | Prop | Value |
 |---|---|
