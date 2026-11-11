@@ -173,6 +173,38 @@ fn option_signals_and_opt_proxy() {
 }
 
 #[test]
+fn exec_async_reports_missing_program_through_callback() {
+    let ctx = hw_ui::gtk4::glib::MainContext::new();
+    ctx.with_thread_default(|| {
+        let dir = config_dir(
+            "exec-missing",
+            &[(
+                "hyprwidget.lua",
+                r#"
+                hw.exec_async({ "hw-no-such-program" }, function(out, err)
+                  RESULT = { out = out, err = err }
+                end)
+                "#,
+            )],
+        );
+        let (_core, rt) = load(dir, None);
+        let mut result = String::new();
+        for _ in 0..100 {
+            ctx.iteration(false);
+            result = rt.eval("return RESULT and RESULT.err or ''").unwrap();
+            if !result.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            result.contains("hw-no-such-program"),
+            "callback should get the spawn error, got {result:?}"
+        );
+    })
+    .unwrap();
+}
+
+#[test]
 fn demo_config_loads_headless() {
     let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/demo");
     let dir = ConfigDir::resolve(Some(demo)).unwrap();

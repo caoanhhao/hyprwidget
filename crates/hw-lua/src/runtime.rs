@@ -769,20 +769,43 @@ fn spawn_process(
     argv: &[std::ffi::OsString],
     flags: gio::SubprocessFlags,
 ) -> Result<gio::Subprocess> {
+    try_spawn(argv, flags).map_err(mlua::Error::runtime)
+}
+
+fn try_spawn(
+    argv: &[std::ffi::OsString],
+    flags: gio::SubprocessFlags,
+) -> std::result::Result<gio::Subprocess, String> {
     let refs: Vec<&std::ffi::OsStr> = argv.iter().map(std::ffi::OsString::as_os_str).collect();
-    gio::Subprocess::newv(&refs, flags)
-        .map_err(|e| mlua::Error::runtime(format!("{:?}: {e}", argv.first())))
+    gio::Subprocess::newv(&refs, flags).map_err(|e| {
+        let prog = argv
+            .first()
+            .map(|p| p.to_string_lossy())
+            .unwrap_or_default();
+        format!("{prog}: {e}")
+    })
 }
 
 /// `hw._exec(cmd, cb)`: runs `cmd` async, then `cb(stdout)` or
-/// `cb(nil, error)`.
+/// `cb(nil, error)`. A program that cannot start (e.g. not installed) is
+/// reported through `cb` too, on a later main-loop iteration.
 fn exec_cb(lua: &Lua, (cmd, cb): (Value, Function)) -> Result<()> {
     let argv = argv(lua, cmd)?;
-    let proc = spawn_process(
+    let weak = lua.weak();
+    let proc = match try_spawn(
         &argv,
         gio::SubprocessFlags::STDOUT_PIPE | gio::SubprocessFlags::STDERR_PIPE,
-    )?;
-    let weak = lua.weak();
+    ) {
+        Ok(proc) => proc,
+        Err(msg) => {
+            glib::spawn_future_local(async move {
+                if let Some(lua) = weak.try_upgrade() {
+                    RtState::spawn(&lua, &cb, (None::<String>, Some(msg)));
+                }
+            });
+            return Ok(());
+        }
+    };
     glib::spawn_future_local(async move {
         let res = proc.communicate_utf8_future(None).await;
         let Some(lua) = weak.try_upgrade() else {
