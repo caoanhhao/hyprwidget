@@ -3,3 +3,4 @@
 .DS_Store
 /examples/demo/cache
 /examples/demo/paths.local.lua
+/examples/demo/config/custom/*.lua
