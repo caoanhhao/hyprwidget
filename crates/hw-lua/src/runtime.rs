@@ -1367,9 +1367,7 @@ fn walk_config(
                 walk_config(lua, st, &sub, path, loc, diags)?;
             }
             Value::Function(resolver) => {
-                st.option_locs
-                    .borrow_mut()
-                    .push((name.clone(), loc.to_owned()));
+                st.option_locs.borrow_mut().push((name, loc.to_owned()));
                 st.resolvers.borrow_mut().push((path.clone(), resolver));
                 options::insert(&mut st.user_opts.borrow_mut(), path, json!("inherit"));
             }
