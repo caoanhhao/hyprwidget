@@ -152,6 +152,8 @@ function M.Setting(key, opts)
           class = "slider",
           width_request = 200,
           draw_value = false,
+          -- The wheel scrolls the settings list, not the value.
+          scroll = false,
           min = meta.min,
           max = meta.max,
           step = meta.type == "int" and 1 or 0.01,

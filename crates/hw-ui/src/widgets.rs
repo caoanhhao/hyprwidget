@@ -351,6 +351,53 @@ fn set_classes(w: &gtk4::Widget, v: &Prop) {
     unsafe { w.set_data(USER_CLASSES, new) };
 }
 
+/// The scroll controllers `scroll = false` took off a widget, kept to put
+/// back on `scroll = true`.
+const BUILTIN_SCROLL: &str = "hw-builtin-scroll";
+/// Name of the controller `on_scroll` adds, which `scroll` leaves alone.
+const ON_SCROLL: &str = "hw-on-scroll";
+
+/// `scroll`: whether the wheel is handled by the widget itself.
+fn set_builtin_scroll(w: &gtk4::Widget, v: &Prop) {
+    if v.truthy() {
+        restore_builtin_scroll(w);
+    } else {
+        remove_builtin_scroll(w);
+    }
+}
+
+/// Puts back the scroll controllers [`remove_builtin_scroll`] took off.
+fn restore_builtin_scroll(w: &gtk4::Widget) {
+    // SAFETY: the key is only ever used with `Vec<gtk4::EventController>`.
+    let kept = unsafe { w.steal_data::<Vec<gtk4::EventController>>(BUILTIN_SCROLL) };
+    for c in kept.into_iter().flatten() {
+        w.add_controller(c);
+    }
+}
+
+/// Turns a widget's own wheel handling (a Scale changing its value) off, so
+/// the wheel goes on to the parent, e.g. a `Scrolled`.
+fn remove_builtin_scroll(w: &gtk4::Widget) {
+    let list = w.observe_controllers();
+    let own: Vec<gtk4::EventController> = (0..list.n_items())
+        .filter_map(|i| list.item(i).and_downcast::<gtk4::EventControllerScroll>())
+        .filter(|c| c.name().as_deref() != Some(ON_SCROLL))
+        .map(Cast::upcast)
+        .collect();
+    if own.is_empty() {
+        return;
+    }
+    for c in &own {
+        w.remove_controller(c);
+    }
+    // SAFETY: as above.
+    let mut kept =
+        unsafe { w.steal_data::<Vec<gtk4::EventController>>(BUILTIN_SCROLL) }.unwrap_or_default();
+    kept.extend(own);
+    // SAFETY: as above.
+    unsafe { w.set_data(BUILTIN_SCROLL, kept) };
+}
+
 /// Sets `name` on a widget of `kind`. Unknown names fall back to a `GObject`
 /// property of the same name (with `_` → `-`).
 pub fn set_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Result<(), String> {
@@ -597,6 +644,7 @@ fn set_control_prop(w: &gtk4::Widget, kind: Kind, name: &str, v: &Prop) -> Resul
         (Kind::Slider, "digits") => cast::<gtk4::Scale>(w).set_digits(int()?),
         (Kind::Slider, "vertical") => cast::<gtk4::Scale>(w).set_orientation(orientation(v)),
         (Kind::Slider, "inverted") => cast::<gtk4::Scale>(w).set_inverted(v.truthy()),
+        (Kind::Slider, "scroll") => set_builtin_scroll(w, v),
 
         (Kind::Switch, "active") => {
             let sw = cast::<gtk4::Switch>(w);
@@ -1009,6 +1057,7 @@ pub fn connect_event(w: &gtk4::Widget, kind: Kind, name: &str, h: Handler) -> Re
         "on_click" => connect_click(w, h),
         "on_scroll" => {
             let c = gtk4::EventControllerScroll::new(gtk4::EventControllerScrollFlags::BOTH_AXES);
+            c.set_name(Some(ON_SCROLL));
             c.connect_scroll(move |_, dx, dy| dispatch(&h, Event::Scroll { dx, dy }));
             w.add_controller(c);
         }

@@ -231,6 +231,9 @@ function Widget:focus() end
 ---@field digits? integer|hw.Signal
 ---@field vertical? boolean|hw.Signal
 ---@field inverted? boolean|hw.Signal
+---Mouse wheel changes the value (default true). false passes the wheel on to
+---the parent, e.g. a `Scrolled`.
+---@field scroll? boolean|hw.Signal
 ---@field on_change? fun(self: hw.Widget, value: number)
 
 ---@class hw.SwitchProps: hw.WidgetProps

@@ -104,7 +104,7 @@ list); a slot name = one child (the first positional child fills `child`).
 | `Stack` | Stack | n (child `name` = page name) | `shown`/`visible_child_name`, `transition` (also `slide_left_right`, `slide_up_down`, `over_*`, `rotate_left/right`), `duration`, `hhomogeneous`, `vhomogeneous` |
 | `Scrolled` | ScrolledWindow | `child` | `hscroll`, `vscroll` (`"never"`/`"auto"`/`"always"`/`"external"`), `propagate_natural_width`, `propagate_natural_height` |
 | `Entry` | Entry | | `text`, `placeholder`/`placeholder_text`, `password`, `position`/`cursor_position` (-1 = end) |
-| `Slider` | Scale | | `value`, `min`, `max`, `step`, `draw_value`, `digits`, `vertical`, `inverted` |
+| `Slider` | Scale | | `value`, `min`, `max`, `step`, `draw_value`, `digits`, `vertical`, `inverted`, `scroll` (false: the mouse wheel scrolls the parent instead of changing the value) |
 | `Switch` | Switch | | `active` |
 | `Progress` | ProgressBar | | `value`/`fraction` (0..1), `vertical`, `inverted`, `text` |
 | `Overlay` | Overlay | `child` (background, decides the size) + n overlays | |
